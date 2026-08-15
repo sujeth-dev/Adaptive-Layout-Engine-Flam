@@ -1,0 +1,265 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0b1020;
+  color: #e2e8f0;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.app {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.app-header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.app-header p {
+  margin: 0 0 20px;
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+.app-body {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .app-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: #111832;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+}
+
+.panel h3 {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.preset-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.preset-buttons button,
+.controls select {
+  cursor: pointer;
+}
+
+button {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  text-align: left;
+}
+
+button.active {
+  background: #4338ca;
+  border-color: #6366f1;
+  color: #fff;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 12px;
+}
+
+.field input,
+.field select {
+  background: #0b1020;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.safe-area-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.preview h2 {
+  align-self: flex-start;
+}
+
+.preview-stage {
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.surface-canvas {
+  position: relative;
+  background: #05070f;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.safe-area-outline {
+  position: absolute;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  pointer-events: none;
+}
+
+.failure-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2a0f14;
+  border: 1px solid #7f1d1d;
+  color: #fca5a5;
+  font-size: 13px;
+  border-radius: 6px;
+  text-align: center;
+  padding: 12px;
+}
+
+.el-text {
+  position: absolute;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: inherit;
+}
+
+.el-role-primary {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.el-role-secondary {
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
+.el-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  padding: 4px;
+}
+
+.el-role-hero {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+}
+
+.el-role-branding {
+  background: linear-gradient(135deg, #334155, #1e293b);
+}
+
+.el-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #22c55e;
+  color: #052e16;
+  font-weight: 700;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 13px;
+}
+
+dt {
+  color: #64748b;
+}
+
+dd {
+  margin: 0;
+  color: #e2e8f0;
+}
+
+.trace ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.trace li {
+  margin-bottom: 4px;
+}
+
+.failure-reason {
+  font-size: 13px;
+  color: #fca5a5;
+}
+
+.trace-log {
+  background: #05070f;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #94a3b8;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
