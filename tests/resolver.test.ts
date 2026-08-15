@@ -2,56 +2,11 @@ import { describe, expect, it } from "vitest";
 import { demoAd } from "../src/spec";
 import { broadcastLowerThird, mobileLandscape, mobilePortrait, retailKiosk, requiredSurfaces } from "../src/surfaces";
 import { resolveLayout } from "../src/resolver";
-import { measureElement } from "../src/measure";
-import { normalizeSurfaceProfile } from "../src/validate";
-import type { ResolvedLayout, SurfaceProfile } from "../src/types";
+import type { SurfaceProfile } from "../src/types";
+import { assertInvariants as assertInvariantsShared } from "./helpers";
 
-function assertInvariants(layout: ResolvedLayout, surface: SurfaceProfile) {
-  const normalized = normalizeSurfaceProfile(surface);
-  const bounds = {
-    left: normalized.safeArea.left,
-    top: normalized.safeArea.top,
-    right: normalized.width - normalized.safeArea.right,
-    bottom: normalized.height - normalized.safeArea.bottom,
-  };
-
-  for (const box of layout.boxes) {
-    expect(box.width).toBeGreaterThan(0);
-    expect(box.height).toBeGreaterThan(0);
-    expect(box.x).toBeGreaterThanOrEqual(bounds.left - 0.01);
-    expect(box.y).toBeGreaterThanOrEqual(bounds.top - 0.01);
-    expect(box.x + box.width).toBeLessThanOrEqual(bounds.right + 0.01);
-    expect(box.y + box.height).toBeLessThanOrEqual(bounds.bottom + 0.01);
-  }
-
-  for (let i = 0; i < layout.boxes.length; i++) {
-    for (let j = i + 1; j < layout.boxes.length; j++) {
-      const a = layout.boxes[i]!;
-      const b = layout.boxes[j]!;
-      const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
-      const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
-      expect(overlapX > 0.01 && overlapY > 0.01, `${a.id} overlaps ${b.id}`).toBe(false);
-    }
-  }
-
-  const rect = { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
-  for (const el of demoAd.elements) {
-    const box = layout.boxes.find((b) => b.id === el.id);
-    if (!box) continue; // omitted, checked elsewhere
-    const measurement = measureElement(el, normalized, rect);
-    expect(box.width, `${el.id} width below floor`).toBeGreaterThanOrEqual(measurement.minWidth - 0.5);
-    expect(box.height, `${el.id} height below floor`).toBeGreaterThanOrEqual(measurement.minHeight - 0.5);
-    if (el.type === "button" && normalized.minTapTarget > 0) {
-      expect(box.width).toBeGreaterThanOrEqual(normalized.minTapTarget - 0.5);
-      expect(box.height).toBeGreaterThanOrEqual(normalized.minTapTarget - 0.5);
-    }
-  }
-
-  const priorityOneIds = demoAd.elements.filter((e) => e.priority === 1).map((e) => e.id);
-  for (const id of priorityOneIds) {
-    expect(layout.omitted.some((o) => o.id === id), `priority-1 element "${id}" was omitted`).toBe(false);
-    expect(layout.boxes.some((b) => b.id === id), `priority-1 element "${id}" missing from boxes`).toBe(true);
-  }
+function assertInvariants(layout: Parameters<typeof assertInvariantsShared>[0], surface: SurfaceProfile) {
+  assertInvariantsShared(layout, surface, demoAd);
 }
 
 describe("resolveLayout — required surfaces", () => {
