@@ -38,10 +38,12 @@ function measureImage(el: Extract<AdElement, { type: "image" }>, rect: Rect): El
   const isHero = el.role === "hero";
 
   if (!isHero) {
-    // branding/logo stays compact regardless of canvas size — logos don't need to grow with the surface
+    // branding/logo stays compact regardless of canvas size — logos don't need to grow with the surface.
+    // A wordmark-shaped logo (wide aspect) still needs a legible floor height, not aspect-ratio-thin.
     const prefWidth = 72;
     const minWidth = 28;
-    return { id: el.id, minWidth, minHeight: minWidth / aspect, prefWidth, prefHeight: prefWidth / aspect };
+    const minHeight = Math.max(minWidth / aspect, 18);
+    return { id: el.id, minWidth, minHeight, prefWidth, prefHeight: prefWidth / aspect };
   }
 
   // A hero image should want to fill a meaningful chunk of whichever dimension is more
@@ -96,13 +98,14 @@ export function measureAll(elements: AdElement[], surface: NormalizedSurfaceProf
   }));
 }
 
-/** Deterministic content order used by every strategy — semantic (role), not surface-driven. */
+/** Deterministic content order used by every strategy — semantic (role), not surface-driven.
+ * Branding sorts first: a logo reads as a small masthead mark, not the last thing in the flow. */
 const ROLE_ORDER: Record<string, number> = {
-  hero: 0,
-  primary: 1,
-  secondary: 2,
-  action: 3,
-  branding: 4,
+  branding: 0,
+  hero: 1,
+  primary: 2,
+  secondary: 3,
+  action: 4,
 };
 
 export function inContentOrder(items: MeasuredElement[]): MeasuredElement[] {

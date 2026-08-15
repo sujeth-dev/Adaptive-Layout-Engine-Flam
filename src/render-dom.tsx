@@ -68,6 +68,15 @@ function ElementBox({ box, element, truncated }: { box: ResolvedBox; element: Ad
     );
   }
 
+  if (element.type === "image" && element.role === "branding") {
+    const fontSize = Math.max(8, Math.min(box.width, box.height) * 0.22);
+    return (
+      <div className="el-brandmark" style={{ ...base, fontSize }} title={element.alt}>
+        <span>{element.alt}</span>
+      </div>
+    );
+  }
+
   if (element.type === "image") {
     return (
       <div className={`el-image el-role-${element.role}`} style={base}>

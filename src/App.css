@@ -204,8 +204,27 @@ button.active {
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
 }
 
-.el-role-branding {
-  background: linear-gradient(135deg, #334155, #1e293b);
+.el-brandmark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+}
+
+.el-brandmark span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .el-button {

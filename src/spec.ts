@@ -13,6 +13,6 @@ export const demoAd: AdSpec = defineAd({
     { id: "product-image", type: "image", role: "hero", priority: 1, alt: "Product shot", aspectRatio: 1.3 },
     { id: "cta", type: "button", role: "action", priority: 2, label: "Shop Now" },
     { id: "price", type: "text", role: "secondary", priority: 2, content: "$29.99" },
-    { id: "logo", type: "image", role: "branding", priority: 3, alt: "Brand logo", aspectRatio: 1 },
+    { id: "logo", type: "image", role: "branding", priority: 3, alt: "Solstice", aspectRatio: 3.4 },
   ],
 });
