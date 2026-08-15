@@ -139,15 +139,17 @@ export default function App() {
           <h2>
             {surface.id} — {surface.width}×{surface.height}
           </h2>
-          <div className="preview-stage" style={{ width: surface.width * scale, height: surface.height * scale }}>
-            <div style={{ transform: `scale(${scale})`, transformOrigin: "top left" }}>
-              {result.ok ? (
-                <RenderedSurface spec={demoAd} layout={result.layout} surface={surface} />
-              ) : (
-                <div className="failure-box" style={{ width: surface.width, height: surface.height }}>
-                  No valid layout — see resolver output
-                </div>
-              )}
+          <div className="preview-stage" style={{ width: PREVIEW_MAX_WIDTH, height: PREVIEW_MAX_HEIGHT }}>
+            <div className="preview-surface" style={{ width: surface.width * scale, height: surface.height * scale }}>
+              <div style={{ transform: `scale(${scale})`, transformOrigin: "top left" }}>
+                {result.ok ? (
+                  <RenderedSurface spec={demoAd} layout={result.layout} surface={surface} />
+                ) : (
+                  <div className="failure-box" style={{ width: surface.width, height: surface.height }}>
+                    No valid layout — see resolver output
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </main>

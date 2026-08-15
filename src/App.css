@@ -139,9 +139,26 @@ button.active {
   align-self: flex-start;
 }
 
+/* Fixed-size frame regardless of which surface is selected — a thin 1920x250
+   broadcast strip and a 1080x1080 kiosk square both sit centered inside the
+   same frame, so the panel doesn't jump in size and the unused frame area
+   reads as an intentional canvas margin instead of a layout accident. */
 .preview-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background-color: #05070f;
+  background-image: radial-gradient(rgba(148, 163, 184, 0.18) 1px, transparent 1px);
+  background-size: 16px 16px;
+  background-position: -1px -1px;
+}
+
+.preview-surface {
   overflow: hidden;
   border-radius: 6px;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.15);
 }
 
 .surface-canvas {
