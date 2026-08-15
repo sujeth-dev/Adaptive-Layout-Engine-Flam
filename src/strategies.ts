@@ -54,11 +54,14 @@ function layoutColumn(items: MeasuredElement[], columnRect: Rect, align: "start"
   });
 }
 
-/** Height-dominant composition: everything stacked top to bottom, content order. */
+/** Height-dominant composition: everything stacked top to bottom, content order.
+ * Centered vertically: on a surface much taller than the content needs, this reads as a
+ * deliberately composed layout with generous margins, not content glued to the top edge
+ * with empty canvas below it. */
 function verticalStack(items: MeasuredElement[], rect: Rect): LayoutCandidate | null {
   const ordered = inContentOrder(items);
   if (ordered.length === 0) return null;
-  const boxes = layoutColumn(ordered, rect, "start");
+  const boxes = layoutColumn(ordered, rect, "center");
   return { strategy: "vertical-stack", boxes };
 }
 
@@ -92,7 +95,11 @@ function horizontalBand(items: MeasuredElement[], rect: Rect): LayoutCandidate |
   const scale = totalPref > 0 ? availableForCols / totalPref : 1;
 
   const boxes: ResolvedBox[] = [];
-  let x = rect.x;
+  // When there's slack (scale >= 1), columns stay at their preferred width rather than
+  // stretching arbitrarily — but the whole row centers within the rect instead of hugging
+  // the left edge, so leftover space reads as balanced margins, not a one-sided void.
+  const contentWidth = totalPref + totalGap;
+  let x = scale >= 1 ? rect.x + Math.max(0, (rect.width - contentWidth) / 2) : rect.x;
   for (let i = 0; i < groups.length; i++) {
     const prefW = prefWidths[i]!;
     const minW = minWidths[i]!;
@@ -128,7 +135,7 @@ function sideBySideSplit(items: MeasuredElement[], rect: Rect): LayoutCandidate 
   }
   if (restItems.length) {
     boxes.push(
-      ...layoutColumn(restItems, { x: rect.x + heroWidth + GAP, y: rect.y, width: restWidth, height: rect.height }, "start"),
+      ...layoutColumn(restItems, { x: rect.x + heroWidth + GAP, y: rect.y, width: restWidth, height: rect.height }, "center"),
     );
   }
   return boxes.length > 0 ? { strategy: "side-by-side-split", boxes } : null;
