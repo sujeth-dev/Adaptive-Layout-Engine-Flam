@@ -32,6 +32,7 @@ export const retailKiosk: SurfaceProfile = {
   width: 1080,
   height: 1080,
   minTapTarget: 60,
+  minTextSize: 20,
   touchOnly: true,
 };
 

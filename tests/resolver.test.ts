@@ -34,10 +34,11 @@ function assertInvariants(layout: ResolvedLayout, surface: SurfaceProfile) {
     }
   }
 
+  const rect = { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
   for (const el of demoAd.elements) {
     const box = layout.boxes.find((b) => b.id === el.id);
     if (!box) continue; // omitted, checked elsewhere
-    const measurement = measureElement(el, normalized);
+    const measurement = measureElement(el, normalized, rect);
     expect(box.width, `${el.id} width below floor`).toBeGreaterThanOrEqual(measurement.minWidth - 0.5);
     expect(box.height, `${el.id} height below floor`).toBeGreaterThanOrEqual(measurement.minHeight - 0.5);
     if (el.type === "button" && normalized.minTapTarget > 0) {

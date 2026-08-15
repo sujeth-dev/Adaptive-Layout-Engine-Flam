@@ -102,7 +102,7 @@ export function resolveLayout(spec: AdSpec, surfaceInput: SurfaceProfile): Resol
   };
 
   const allElements = spec.elements;
-  let pool = measureAll(allElements, surface);
+  let pool = measureAll(allElements, surface, rect);
   const omitted: OmittedElement[] = [];
   const degradations: DegradationRecord[] = [];
   const trace: string[] = [

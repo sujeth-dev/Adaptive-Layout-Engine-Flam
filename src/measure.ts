@@ -7,7 +7,7 @@
 // isolated to this file so it could be swapped for real text metrics later
 // without touching strategies/validate/score/resolver.
 
-import type { AdElement, ElementMeasurement, MeasuredElement, NormalizedSurfaceProfile } from "./types";
+import type { AdElement, ElementMeasurement, MeasuredElement, NormalizedSurfaceProfile, Rect } from "./types";
 
 const LINE_HEIGHT_FACTOR = 1.35;
 const AVG_CHAR_WIDTH_FACTOR = 0.56;
@@ -33,12 +33,25 @@ function measureText(el: Extract<AdElement, { type: "text" }>, surface: Normaliz
   };
 }
 
-function measureImage(el: Extract<AdElement, { type: "image" }>): ElementMeasurement {
+function measureImage(el: Extract<AdElement, { type: "image" }>, rect: Rect): ElementMeasurement {
   const aspect = el.aspectRatio && el.aspectRatio > 0 ? el.aspectRatio : 1;
   const isHero = el.role === "hero";
 
-  const prefWidth = isHero ? 220 : 72;
-  const minWidth = isHero ? 96 : 28;
+  if (!isHero) {
+    // branding/logo stays compact regardless of canvas size — logos don't need to grow with the surface
+    const prefWidth = 72;
+    const minWidth = 28;
+    return { id: el.id, minWidth, minHeight: minWidth / aspect, prefWidth, prefHeight: prefWidth / aspect };
+  }
+
+  // A hero image should want to fill a meaningful chunk of whichever dimension is more
+  // constrained, not a fixed pixel size — otherwise a huge kiosk canvas ends up with the
+  // same tiny hero as a phone banner, leaving most of the surface unused. Budget from both
+  // width and height (converted through the aspect ratio) and take the tighter one.
+  const widthBudget = rect.width * 0.45;
+  const heightBudget = rect.height * 0.85 * aspect;
+  const prefWidth = Math.min(Math.max(Math.min(widthBudget, heightBudget), 140), 480);
+  const minWidth = 96;
 
   return {
     id: el.id,
@@ -64,21 +77,21 @@ function measureButton(el: Extract<AdElement, { type: "button" }>, surface: Norm
   return { id: el.id, minWidth, minHeight, prefWidth, prefHeight };
 }
 
-export function measureElement(el: AdElement, surface: NormalizedSurfaceProfile): ElementMeasurement {
+export function measureElement(el: AdElement, surface: NormalizedSurfaceProfile, rect: Rect): ElementMeasurement {
   switch (el.type) {
     case "text":
       return measureText(el, surface);
     case "image":
-      return measureImage(el);
+      return measureImage(el, rect);
     case "button":
       return measureButton(el, surface);
   }
 }
 
-export function measureAll(elements: AdElement[], surface: NormalizedSurfaceProfile): MeasuredElement[] {
+export function measureAll(elements: AdElement[], surface: NormalizedSurfaceProfile, rect: Rect): MeasuredElement[] {
   return elements.map((element) => ({
     element,
-    measurement: measureElement(element, surface),
+    measurement: measureElement(element, surface, rect),
     truncated: false,
   }));
 }

@@ -96,10 +96,13 @@ button.active {
   font-size: 12px;
   color: #94a3b8;
   margin-bottom: 12px;
+  min-width: 0;
 }
 
 .field input,
 .field select {
+  width: 100%;
+  min-width: 0;
   background: #0b1020;
   border: 1px solid #334155;
   color: #e2e8f0;
