@@ -18,8 +18,8 @@ const PRESETS: { id: string; label: string; profile: SurfaceProfile }[] = [
   { id: "constrainedBanner", label: "Constrained (degradation demo)", profile: constrainedBanner },
 ];
 
-const PREVIEW_MAX_WIDTH = 560;
-const PREVIEW_MAX_HEIGHT = 420;
+const PREVIEW_MAX_WIDTH = 760;
+const PREVIEW_MAX_HEIGHT = 480;
 const SAFE_AREA_SIDES = ["top", "right", "bottom", "left"] as const;
 
 export default function App() {

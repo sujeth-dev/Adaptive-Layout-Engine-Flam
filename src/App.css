@@ -25,16 +25,39 @@ body {
   font-size: 14px;
 }
 
+/* Canvas-first: controls beside a dominant preview on top, resolver output as a
+   full-width console band below — not a third sidebar competing with the ad
+   canvas for attention. The trace is the actual evidence for "why does this
+   element look the way it does," so it gets room to be read, not squeezed. */
 .app-body {
   display: grid;
-  grid-template-columns: 280px 1fr 320px;
+  grid-template-columns: 280px 1fr;
+  grid-template-areas:
+    "controls preview"
+    "trace trace";
   gap: 16px;
   align-items: start;
+}
+
+.panel.controls {
+  grid-area: controls;
+}
+
+.panel.preview {
+  grid-area: preview;
+}
+
+.panel.trace {
+  grid-area: trace;
 }
 
 @media (max-width: 1000px) {
   .app-body {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "controls"
+      "preview"
+      "trace";
   }
 }
 
@@ -264,6 +287,34 @@ dl {
   font-size: 13px;
 }
 
+/* The trace panel is now a full-width band, so its headline stats (strategy,
+   score, visible count) read as a row of console-style readouts instead of a
+   cramped label/value list — the score in particular is the single number
+   that matters most here, so it gets real visual weight. */
+.trace dl {
+  display: grid;
+  grid-template-columns: none;
+  grid-auto-columns: max-content;
+  grid-auto-flow: column;
+  grid-template-rows: auto auto;
+  justify-content: start;
+  column-gap: 40px;
+  row-gap: 4px;
+}
+
+.trace dt {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.trace dd {
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 dt {
   color: #64748b;
 }
@@ -294,8 +345,9 @@ dd {
   border: 1px solid #1e293b;
   border-radius: 6px;
   padding: 10px;
-  font-size: 11px;
-  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
   color: #94a3b8;
   max-height: 320px;
   overflow: auto;
