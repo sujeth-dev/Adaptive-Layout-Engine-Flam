@@ -53,6 +53,14 @@ export interface SafeArea {
   left: number;
 }
 
+/** Axis-aligned rectangle, used for the available layout area and every resolved box. */
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export type ViewingDistance = "close" | "medium" | "far";
 
 /** As authored — optional fields are filled in by normalizeSurfaceProfile(). */
@@ -130,6 +138,31 @@ export interface ResolutionFailure {
 export type ResolveResult =
   | { ok: true; layout: ResolvedLayout }
   | ResolutionFailure;
+
+// ---------------------------------------------------------------------------
+// Internal resolver pipeline types (measure → strategies → validate → score).
+// Not part of the public spec/output contract, but shared across those stages.
+// ---------------------------------------------------------------------------
+
+export interface ElementMeasurement {
+  id: string;
+  minWidth: number;
+  minHeight: number;
+  prefWidth: number;
+  prefHeight: number;
+}
+
+export interface MeasuredElement {
+  element: AdElement;
+  measurement: ElementMeasurement;
+  /** true once truncation has been applied by the degradation ladder */
+  truncated: boolean;
+}
+
+export interface LayoutCandidate {
+  strategy: string;
+  boxes: ResolvedBox[];
+}
 
 // ---------------------------------------------------------------------------
 // Generic validation result, shared by spec/surface validation.

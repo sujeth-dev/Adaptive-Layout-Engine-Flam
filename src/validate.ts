@@ -7,7 +7,10 @@
 import type {
   AdSpec,
   AdElement,
+  ElementMeasurement,
+  LayoutCandidate,
   NormalizedSurfaceProfile,
+  Rect,
   SafeArea,
   SurfaceProfile,
   ValidationResult,
@@ -129,4 +132,78 @@ export function normalizeSurfaceProfile(surface: SurfaceProfile): NormalizedSurf
     viewingDistance: surface.viewingDistance ?? DEFAULT_VIEWING_DISTANCE,
     touchOnly: surface.touchOnly ?? false,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Candidate (resolved geometry) hard validation.
+//
+// This is where "never overlap or clip", "respect min text size", and
+// "respect tap target" are actually enforced. A candidate that fails any of
+// these is rejected outright — never silently repaired.
+// ---------------------------------------------------------------------------
+
+const EPS = 1e-6;
+
+export interface CandidateValidation {
+  valid: boolean;
+  reasons: string[];
+}
+
+export function validateCandidate(
+  candidate: LayoutCandidate,
+  measuredById: Map<string, ElementMeasurement>,
+  elementsById: Map<string, AdElement>,
+  surface: NormalizedSurfaceProfile,
+  rect: Rect,
+): CandidateValidation {
+  const reasons: string[] = [];
+
+  for (const box of candidate.boxes) {
+    if (box.width <= 0 || box.height <= 0) {
+      reasons.push(`"${box.id}" has non-positive geometry (${box.width}x${box.height})`);
+      continue;
+    }
+
+    if (
+      box.x < rect.x - EPS ||
+      box.y < rect.y - EPS ||
+      box.x + box.width > rect.x + rect.width + EPS ||
+      box.y + box.height > rect.y + rect.height + EPS
+    ) {
+      reasons.push(`"${box.id}" falls outside the safe-area bounds`);
+    }
+
+    const measurement = measuredById.get(box.id);
+    if (measurement) {
+      if (box.width < measurement.minWidth - EPS) {
+        reasons.push(`"${box.id}" width ${box.width.toFixed(1)}px is below its minimum ${measurement.minWidth.toFixed(1)}px`);
+      }
+      if (box.height < measurement.minHeight - EPS) {
+        reasons.push(`"${box.id}" height ${box.height.toFixed(1)}px is below its minimum ${measurement.minHeight.toFixed(1)}px`);
+      }
+    }
+
+    const element = elementsById.get(box.id);
+    if (element?.type === "button" && surface.minTapTarget > 0) {
+      if (box.width < surface.minTapTarget - EPS || box.height < surface.minTapTarget - EPS) {
+        reasons.push(
+          `"${box.id}" (${box.width.toFixed(1)}x${box.height.toFixed(1)}) violates minTapTarget=${surface.minTapTarget}`,
+        );
+      }
+    }
+  }
+
+  for (let i = 0; i < candidate.boxes.length; i++) {
+    for (let j = i + 1; j < candidate.boxes.length; j++) {
+      const a = candidate.boxes[i]!;
+      const b = candidate.boxes[j]!;
+      const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+      const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+      if (overlapX > EPS && overlapY > EPS) {
+        reasons.push(`"${a.id}" overlaps "${b.id}"`);
+      }
+    }
+  }
+
+  return { valid: reasons.length === 0, reasons };
 }
