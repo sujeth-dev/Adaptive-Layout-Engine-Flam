@@ -40,7 +40,8 @@ never scored, never repaired):
 **Soft preferences** (traded off by `score.ts`, never block a candidate):
 - preferred element size vs. actual
 - hero image aspect ratio vs. actual
-- sensible (not maximal) use of available space
+- frame coverage and opposing-edge balance
+- consistent spacing rhythm and semantic hierarchy
 - keeping secondary/branding content visible rather than dropped
 
 The line matters: a candidate that violates a hard constraint is deleted
@@ -49,12 +50,13 @@ low is still a valid, renderable layout — it's just not the winner.
 
 ## Candidate generation
 
-Four strategies, each a pure function `(MeasuredElement[], Rect) →
-LayoutCandidate | null`:
+Four strategies, each a pure function `(MeasuredElement[], Rect, gap,
+presentation) → LayoutCandidate | null`, run with both `natural` and
+`frame-fill` presentations:
 
-- **`vertical-stack`** — every element stacked top-to-bottom in content
-  order (hero, primary text, secondary text, action, branding), full
-  available width. Wins on tall/narrow rectangles.
+- **`vertical-stack`** — every element stacked top-to-bottom in authored
+  reading order. In the demo that is headline → hero → CTA → price →
+  branding. Wins on tall/narrow rectangles.
 - **`horizontal-band`** — branding · hero · text-cluster · action as
   side-by-side columns. Wins on very wide/short rectangles.
 - **`side-by-side-split`** — hero occupies one column, everything else
@@ -78,6 +80,18 @@ and gets rejected, while `horizontal-band` genuinely fits it.
 A strategy returns `null` (not broken geometry) when it can't produce a
 sensible candidate at all — e.g. zero visible elements.
 
+`natural` preserves preferred dimensions. `frame-fill` expands by semantic
+role: primary text and hero approach the safe width, actions may become broad
+bars, while price and branding stay compact. It then distributes groups along
+the flow axis with balanced outer margins. Images always derive one dimension
+from their active aspect ratio; text and buttons have role-specific caps.
+This is candidate generation, not degradation, so choosing `frame-fill` adds
+no degradation record and never alters the content ladder.
+
+Authored order and degradation order are intentionally separate. Vertical
+reading order follows `AdSpec.elements`; priority and role ordering are used
+only to decide which element may degrade next.
+
 ## Measurement and text sizing
 
 `measure.ts` estimates every element's min/preferred box size before any
@@ -97,15 +111,16 @@ strategy runs. Two things about it matter enough to call out explicitly:
   preferred width via a too-tight estimate, then visibly clipped by the real
   browser font — was a genuine bug caught by screenshotting the running demo,
   not a hypothetical.
-- **`buttonFontSize()` is a single shared function**, called by both
+- **Button font and label measurement are shared functions**, called by both
   `measure.ts` (to size the button's box) and `render-dom.tsx` (to render the
-  label). Earlier, `render-dom.tsx` derived the button's font size independently
+  label). Earlier, `render-dom.tsx` derived its font size independently
   from `box.height` (`box.height * 0.4`) instead of reusing the value
   `measure.ts` had actually assumed when it computed the box's *width* — the
   two numbers didn't agree, so a button could be sized for a 15px label and
   then rendered at 17.6px, wrapping "Shop Now" onto two lines inside a fixed-
-  height pill. Sharing one function removes the possibility of that drift by
-  construction, rather than by convention. `measureButton()`'s `minWidth` is
+  height pill. Natural presentation uses the exact shared base size;
+  frame-fill may enlarge it, but clamps that growth using the same measured
+  active-label width and the box's horizontal padding budget. `measureButton()`'s `minWidth` is
   also now a hard floor of "the label fits on one line at this exact font
   size" (`prefWidth`, not an arbitrary shrink fraction of it) — a button can
   still shrink toward its tap-target floor in height, but never becomes
@@ -130,10 +145,13 @@ resolver trace panel in the demo — every rejection is visible, not silent.
 ```ts
 score =
     0.30 × priorityRetained        // Σ(1/priority) of visible ÷ Σ(1/priority) of all
-  + 0.25 × heroShapeQuality        // 1 − normalized deviation from hero's preferred aspect ratio
-  + 0.20 × preferredSizeSatisfaction // mean(min(actual/preferred, 1)) across visible elements
-  + 0.15 × spaceUtilization        // min(usedArea/rectArea, 0.8) / 0.8
+  + 0.20 × frameCoverage           // strategy-aware X/Y extent across the safe rect
+  + 0.20 × heroShapeQuality        // 1 − normalized deviation from hero's preferred aspect ratio
+  + 0.10 × preferredSizeFidelity   // mean closeness to preferred dimensions
+  + 0.10 × edgeBalance             // similarity of opposing outer margins
+  + 0.10 × rhythmAndHierarchy      // gap consistency + semantic scale
   − 0.10 × truncationPenalty       // fraction of visible elements marked truncated
+  − 0.01 × excessiveGrowthPenalty  // progressive charge above 2× preferred size
 ```
 
 (`score.ts`, `SCORE_WEIGHTS`.)
@@ -142,22 +160,30 @@ score =
   encodes the assignment's core rule: keeping high-priority content visible
   matters more than any geometric quality. `1/priority` means priority-1
   content contributes far more than priority-3.
-- **`heroShapeQuality`** (0.25) penalizes stretching/squashing the hero
+- **`frameCoverage`** (0.20) scores how much of the meaningful flow axes the
+  composition spans. Axis emphasis follows the candidate strategy, not a
+  named surface or device.
+- **`heroShapeQuality`** (0.20) penalizes stretching/squashing the hero
   image away from its authored aspect ratio — a hero crammed into the wrong
   shape looks broken even if it technically fits.
-- **`preferredSizeSatisfaction`** (0.20) rewards candidates that get closer
+- **`preferredSizeFidelity`** (0.10) rewards candidates that get closer
   to every element's natural preferred size, not just the bare minimum.
-- **`spaceUtilization`** (0.15) is deliberately capped: `min(used, 0.8) /
-  0.8` means a candidate using 80%+ of the rectangle scores the same as one
-  using 100%. This exists specifically so scoring never rewards stretching
-  content to fill space just to inflate the number — "uniform scaling
-  passed off as adaptation" is exactly what the assignment warns against.
-- **`truncationPenalty`** (−0.10, the only negative term) is a small tie-breaker
+- **`edgeBalance`** (0.10) compares left/right and top/bottom outer margins;
+  a full composition pushed against one edge scores below a centered peer.
+- **`rhythmAndHierarchy`** (0.10) combines gap consistency with semantic
+  scale: hero/primary/action should lead without stretching compact metadata.
+- **`truncationPenalty`** (−0.10) is a small tie-breaker
   that prefers a non-truncated candidate over an otherwise-similar
   truncated one, without dominating the priority-retained term.
+- **`excessiveGrowthPenalty`** (−0.01) starts only above twice an element's
+  preferred size. It prevents semantic caps from becoming automatic targets.
 
 Weights are declared once, together, in `SCORE_WEIGHTS` — not scattered as
 inline magic numbers through the scoring functions.
+
+`evaluateComposition()` also publishes normalized `coverageX`, `coverageY`,
+`balanceX`, `balanceY`, and `spacingConsistency` on every `ResolvedLayout`.
+The trace includes presentation and coverage for each valid candidate.
 
 ## Degradation
 

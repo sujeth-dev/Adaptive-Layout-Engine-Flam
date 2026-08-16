@@ -147,9 +147,23 @@ export interface DegradationRecord {
   mergedContent?: string;
 }
 
+/** Presentation density is a non-destructive candidate choice, never a degradation. */
+export type PresentationVariant = "natural" | "frame-fill";
+
+/** Renderer-independent composition diagnostics, normalized to the available rect. */
+export interface CompositionMetrics {
+  coverageX: number;
+  coverageY: number;
+  balanceX: number;
+  balanceY: number;
+  spacingConsistency: number;
+}
+
 export interface ResolvedLayout {
   surfaceId: string;
   strategy: string;
+  presentation: PresentationVariant;
+  composition: CompositionMetrics;
   score: number;
   boxes: ResolvedBox[];
   omitted: OmittedElement[];
@@ -207,6 +221,7 @@ export interface MeasuredElement {
 
 export interface LayoutCandidate {
   strategy: string;
+  presentation: PresentationVariant;
   boxes: ResolvedBox[];
 }
 

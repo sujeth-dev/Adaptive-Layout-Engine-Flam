@@ -40,7 +40,7 @@ export const demoAd: AdSpec = defineAd({
       role: "action",
       priority: 2,
       label: "Shop Now",
-      shortLabel: "Shop",
+      shortLabel: "Shop 🛒",
       icon: "🛒",
     },
     {

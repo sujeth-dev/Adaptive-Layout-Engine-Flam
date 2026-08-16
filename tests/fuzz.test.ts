@@ -71,6 +71,13 @@ describe("fuzz — random surface profiles", () => {
       if (result.ok) {
         successes++;
         const violations = findInvariantViolations(result.layout, surface, demoAd);
+        if (result.layout.boxes.length >= 4) {
+          if (result.layout.composition.balanceX < 0.7 || result.layout.composition.balanceY < 0.7) {
+            violations.push(
+              `composition is visibly edge-biased (balance ${result.layout.composition.balanceX.toFixed(3)}x${result.layout.composition.balanceY.toFixed(3)})`,
+            );
+          }
+        }
         if (violations.length > 0) {
           invariantViolations.push(`surface ${JSON.stringify(surface)}:\n  ${violations.join("\n  ")}`);
         }

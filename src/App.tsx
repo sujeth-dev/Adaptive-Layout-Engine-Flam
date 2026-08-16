@@ -7,12 +7,17 @@ import type { DegradationAction, SafeArea, SurfaceProfile, ViewingDistance } fro
 import "./App.css";
 
 // This is UI wiring only — labels/ids here are for the picker, never consumed
-// by the resolver as a layout decision. Height tightened from an earlier 130px: once
-// gap-compaction and real text measurement made the resolver strictly better at
-// fitting content, 300x130 stopped needing any degradation at all — this shorter
-// banner still meaningfully demonstrates the ladder (branding drops, price merges
-// into the CTA) instead of just succeeding cleanly.
-const constrainedBanner: SurfaceProfile = { id: "constrainedBanner", width: 300, height: 100, minTapTarget: 40 };
+// by the resolver as a layout decision. The shallow profile deliberately drives
+// lower-priority content through merge + iconify while the priority-1 headline
+// and hero, plus an accessible CTA, remain visible.
+const constrainedBanner: SurfaceProfile = {
+  id: "constrainedBanner",
+  width: 510,
+  height: 90,
+  safeArea: { top: 8, right: 8, bottom: 8, left: 8 },
+  minTapTarget: 40,
+  minTextSize: 11,
+};
 
 const PRESETS: { id: string; label: string; profile: SurfaceProfile }[] = [
   { id: "mobilePortrait", label: "Mobile Portrait", profile: mobilePortrait },
@@ -156,7 +161,7 @@ export default function App() {
                 {surface.width} <span>×</span> {surface.height}
               </p>
             </div>
-            {result.ok && <span className="strategy-pill">{result.layout.strategy}</span>}
+            {result.ok && <span className="strategy-pill">{result.layout.strategy} / {result.layout.presentation}</span>}
           </div>
           <div className="preview-stage" style={{ width: PREVIEW_MAX_WIDTH, height: PREVIEW_MAX_HEIGHT }}>
             <div className="preview-surface" style={{ width: surface.width * scale, height: surface.height * scale }}>
@@ -211,12 +216,12 @@ export default function App() {
               <span className="mono-label">Width</span>
               <span className="fval tabular">{surface.width}px</span>
             </div>
-            <input type="range" min={100} max={1920} value={surface.width} onChange={(e) => updateField("width", Number(e.target.value))} />
+            <input aria-label="Surface width" type="range" min={100} max={1920} value={surface.width} onChange={(e) => updateField("width", Number(e.target.value))} />
             <div className="field-row-line" style={{ marginTop: "var(--s3)" }}>
               <span className="mono-label">Height</span>
               <span className="fval tabular">{surface.height}px</span>
             </div>
-            <input type="range" min={80} max={1200} value={surface.height} onChange={(e) => updateField("height", Number(e.target.value))} />
+            <input aria-label="Surface height" type="range" min={80} max={1200} value={surface.height} onChange={(e) => updateField("height", Number(e.target.value))} />
           </div>
 
           <div className="rail-section">
@@ -229,6 +234,7 @@ export default function App() {
                   </span>
                 </span>
                 <input
+                  aria-label="Minimum tap target"
                   type="number"
                   min={0}
                   value={surface.minTapTarget ?? 0}
@@ -243,6 +249,7 @@ export default function App() {
                   </span>
                 </span>
                 <input
+                  aria-label="Minimum text size"
                   type="number"
                   min={0}
                   value={surface.minTextSize ?? 0}
@@ -283,6 +290,7 @@ export default function App() {
                 <label className="field" key={side}>
                   <span className="mono-label">{side}</span>
                   <input
+                    aria-label={`Safe area ${side}`}
                     type="number"
                     min={0}
                     value={surface.safeArea?.[side] ?? 0}
@@ -323,6 +331,9 @@ export default function App() {
                       </div>
                       <p className="mono-label">
                         {result.layout.boxes.length} / {demoAd.elements.length} elements visible
+                      </p>
+                      <p className="mono-label">
+                        Frame {(result.layout.composition.coverageX * 100).toFixed(0)}% × {(result.layout.composition.coverageY * 100).toFixed(0)}%
                       </p>
                     </div>
                   </div>

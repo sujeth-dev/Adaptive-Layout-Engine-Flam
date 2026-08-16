@@ -5,6 +5,7 @@
 
 import { expect } from "vitest";
 import { measureElement } from "../src/measure";
+import { evaluateComposition } from "../src/score";
 import { normalizeSurfaceProfile } from "../src/validate";
 import type { AdSpec, ResolvedLayout, SurfaceProfile } from "../src/types";
 
@@ -45,6 +46,18 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
   }
 
   const rect = { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
+  const recomputedComposition = evaluateComposition(
+    { strategy: layout.strategy, presentation: layout.presentation, boxes: layout.boxes },
+    rect,
+  );
+  for (const key of ["coverageX", "coverageY", "balanceX", "balanceY", "spacingConsistency"] as const) {
+    if (Math.abs(layout.composition[key] - recomputedComposition[key]) > 0.000001) {
+      violations.push(`composition.${key} does not match resolved geometry`);
+    }
+    if (!Number.isFinite(layout.composition[key]) || layout.composition[key] < 0 || layout.composition[key] > 1) {
+      violations.push(`composition.${key} must be normalized, got ${layout.composition[key]}`);
+    }
+  }
   // An element can carry MULTIPLE simultaneous degradation records (e.g. a button
   // iconified in one rung, then also shrunk in a later rung) — check each action
   // category independently rather than collapsing all of an id's records into one.
@@ -60,6 +73,9 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
     const variant = hasAction(el.id, "iconify") ? "icon" : hasAction(el.id, "shorten") ? "short" : "full";
     const cropped = hasAction(el.id, "crop");
     const measurement = measureElement(el, normalized, rect, variant, cropped);
+    if (el.type === "text" && !hasAction(el.id, "truncate") && box.width < measurement.prefWidth - 0.5) {
+      violations.push(`${el.id}: untruncated width ${box.width.toFixed(1)} below measured content ${measurement.prefWidth.toFixed(1)}`);
+    }
     if (box.width < measurement.minWidth - 0.5) {
       violations.push(`${el.id}: width ${box.width.toFixed(1)} below floor ${measurement.minWidth.toFixed(1)}`);
     }

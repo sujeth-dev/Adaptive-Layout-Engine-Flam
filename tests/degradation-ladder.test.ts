@@ -18,10 +18,10 @@ function assertInvariants(layout: Parameters<typeof assertInvariantsShared>[0], 
 describe("degradation ladder — content-variant rungs", () => {
   const tight: SurfaceProfile = {
     id: "tight-content-ladder",
-    width: 320,
-    height: 211,
-    safeArea: { top: 31, bottom: 3, left: 75, right: 87 },
-    minTapTarget: 7,
+    width: 510,
+    height: 90,
+    safeArea: { top: 8, right: 8, bottom: 8, left: 8 },
+    minTapTarget: 40,
     minTextSize: 11,
   };
 
@@ -73,18 +73,16 @@ describe("degradation ladder — icon-only tap target guarantee", () => {
   });
 
   // The accessible name (aria-label = the full original label whenever the icon-only
-  // state renders) is enforced in render-dom.tsx, not resolver.ts — this project has no
-  // DOM/component-testing harness (no @testing-library/react, no jsdom environment;
-  // vite.config.ts runs tests under environment:"node"), so that specific behavior is
-  // verified by code review and manual browser check rather than an automated test here.
+  // state renders) is enforced in render-dom.tsx and covered in Chromium by
+  // e2e/composition.spec.ts; this Node test owns the resolver-side geometry floor.
 });
 
 describe("degradation ladder — global spacing-compaction rung", () => {
   it("resolves via a tighter gap alone, before any content or geometry degrades", () => {
     const surface: SurfaceProfile = {
       id: "gap-only",
-      width: 220,
-      height: 296,
+      width: 420,
+      height: 180,
       safeArea: { top: 16, right: 12, bottom: 16, left: 12 },
       minTapTarget: 44,
     };
@@ -111,8 +109,7 @@ describe("text measurement", () => {
     // dependency) — this exercises measureTextWidth's fallback path, the same path
     // covered indirectly by every other test in this suite. The real
     // CanvasRenderingContext2D.measureText() path only runs in an actual browser;
-    // it was verified manually (Playwright screenshots of the running demo) rather
-    // than by an automated test, for the same reason noted above.
+    // it is verified by the Playwright suite's instrumented real-browser test.
     const surface = normalizeSurfaceProfile({ id: "text-check", width: 400, height: 400 });
     const rect = { x: 0, y: 0, width: 400, height: 400 };
     const headline = demoAd.elements.find((e) => e.id === "headline")!;

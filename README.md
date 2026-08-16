@@ -15,6 +15,7 @@ Ad Spec + Surface Profile → Normalize → Measure → Generate candidates
 npm install
 npm run dev        # demo at http://localhost:5173
 npm test           # unit + invariant + fuzz suites
+npm run test:browser # Playwright layout/accessibility/screenshots (Chromium)
 npm run build      # typecheck + production build
 npm run typecheck  # tsc only, no emit
 ```
@@ -39,7 +40,7 @@ Ad Spec + Surface Profile
         ↓ validate + normalize (src/validate.ts)
 Measured elements
         ↓ measure.ts — min/preferred size per element
-Candidate layouts (×4 strategies, src/strategies.ts)
+Candidate layouts (4 strategies × 2 presentations, src/strategies.ts)
         ↓ validate.ts — bounds, overlap, size floors, tap target
 Valid candidates
         ↓ score.ts — weighted scoring
@@ -62,8 +63,9 @@ render-dom.tsx — paints boxes, decides nothing
    themselves as a budget of the available rectangle (see
    [ARCHITECTURE.md](ARCHITECTURE.md) for why).
 3. **Generate candidates**: all 4 strategies (`vertical-stack`,
-   `horizontal-band`, `side-by-side-split`, `adaptive-grid`) run
-   unconditionally, every time, for every surface. None of them inspects
+   `horizontal-band`, `side-by-side-split`, `adaptive-grid`) run in both
+   `natural` (preferred-size) and `frame-fill` (semantic expansion and flow
+   distribution) presentations, every time, for every surface. None inspects
    surface identity or an aspect-ratio threshold — they're pure geometric
    compositions over the available rectangle and the measured elements.
 4. **Validate** each candidate against hard constraints: every box inside
@@ -73,6 +75,13 @@ render-dom.tsx — paints boxes, decides nothing
 5. **Score** the surviving candidates with a deterministic weighted formula
    (below) and keep the highest score.
 6. If **nothing validates**, degrade and retry (next section).
+
+For the 320×480 portrait benchmark, this resolves to the authored reading
+order `headline → hero → CTA → price → branding`: headline/hero/CTA span most
+of the safe width, price and branding remain compact, and the remaining height
+becomes consistent gaps with balanced outer margins. Wide and square profiles
+may choose a band, split, or grid through the same candidate/scoring pipeline.
+Frame filling never counts as degradation and never distorts an image.
 
 ## Priority and degradation
 
@@ -121,6 +130,10 @@ own attempt didn't succeed.
   (`ResolutionFailure`) are both fully typed and returned as a
   discriminated `ResolveResult`, so a caller (or a test) can't accidentally
   read `.boxes` off a failed resolution.
+- Every resolved layout identifies its `presentation` and exposes typed
+  `composition` metrics (`coverageX/Y`, `balanceX/Y`, and
+  `spacingConsistency`). The trace and demo panel expose the same values,
+  so frame usage and balance are inspectable rather than subjective-only.
 - Everything above is compile-time. Because specs and surfaces can also
   arrive dynamically (a live 5th surface, JSON from a CMS), `validate.ts`
   re-checks every constraint at runtime: duplicate ids, non-positive
@@ -135,7 +148,7 @@ own attempt didn't succeed.
 
 ## Testing
 
-35 tests across 4 files, all passing:
+48 resolver/unit tests across 5 files, plus 4 Chromium Playwright tests:
 
 - `tests/validate.test.ts` — 14 tests: spec/surface runtime validation.
 - `tests/resolver.test.ts` — 13 tests: all 4 required surfaces, an unknown
@@ -151,21 +164,26 @@ own attempt didn't succeed.
   its own before any content degrades (and never fires needlessly when the
   default gap already fits), and a sanity check on the text-measurement
   fallback path.
+- `tests/composition.test.ts` — 13 tests: the exact 320×480 authored order,
+  role-specific width/height targets, aspect-ratio preservation, outer-margin
+  balance, all required presets, min/max extremes, narrow-tall/wide-short
+  profiles, and five fixed unusual exploratory profiles.
 - `tests/fuzz.test.ts` — 400 seeded-random surface profiles (width
   200–1920, height 120–1200, randomized safe area / `minTapTarget` /
   `minTextSize` / `viewingDistance` / `touchOnly`, 20% biased toward a tight
   low-end corner so genuinely impossible surfaces get exercised, not just
-  hand-picked ones). Last run: **391 resolved, 9 typed failures, 0
-  invariant violations.** A second test asserts the resolver never throws
-  at the extremes of the fuzzed range.
+  hand-picked ones). Last run: **389 resolved, 11 typed failures, 0
+  invariant violations.** Successful layouts with at least four visible
+  elements also validate normalized composition metrics and margin balance.
+- `e2e/composition.spec.ts` — real Chromium checks for required presets,
+  the 320×480 target, rendered coverage/order, live 1920×120 resizing,
+  actual `CanvasRenderingContext2D.measureText()` calls, zero undeclared
+  text/button overflow, screenshot artifacts, and the icon-only CTA's full
+  accessible name.
 
-No component/DOM-rendering test harness exists in this project (no
-`@testing-library/react`, no jsdom — `vite.config.ts` runs tests under
-`environment: "node"`). Two things that are consequently verified by code
-review and manual browser check rather than an automated test: the
-icon-only button's `aria-label` (render-dom.tsx), and the real
-`CanvasRenderingContext2D.measureText()` path in `measure.ts` (only the
-Node fallback estimate is exercised by the automated suite).
+Install the browser once with `npx playwright install chromium`, then run
+`npm run test:browser`. Its HTML report and visual-review attachments are
+written to `playwright-report/`.
 
 ## Known limitations
 
@@ -186,10 +204,10 @@ Node fallback estimate is exercised by the automated suite).
   `croppedAspectRatio`/`merges`) is entirely spec-declared and optional; the
   demo spec (`spec.ts`) populates all of it to demonstrate the fuller
   ladder, but the resolver places no requirement on any spec to use it.
-- The space-utilization score term intentionally caps below full occupancy
-  (see ARCHITECTURE.md) — on a very large surface with only 5 elements,
-  the resolver will leave visible empty space rather than stretch content
-  to fill it, which is a deliberate choice but can look sparse.
+- Frame-fill enlarges only within semantic caps (hero 960px, CTA 720px,
+  compact secondary/branding caps). Extremely large or sparse surfaces may
+  therefore retain deliberate whitespace rather than distorting an image or
+  turning a small label into an oversized object.
 - Scoring weights and the hero size budget are reasoned heuristics
   documented in `score.ts`/`measure.ts`, not empirically tuned.
 
@@ -205,7 +223,8 @@ Built with **Claude Code** (Anthropic, Sonnet 5) end-to-end: type design,
 the resolver algorithm, candidate strategies, scoring, the degradation
 ladder (including the later content-variant/merge/spacing-compaction
 extension), the demo UI, and this documentation. Verified along the way
-with: 35 automated tests plus a 400-surface fuzz suite, a full
+with: 48 resolver/unit tests, 4 Chromium browser tests, a 400-surface fuzz
+suite, a full
 `grep -rn 'surface.id ===' src/` (and equivalents) hardcoding audit, and
 repeated manual visual verification by screenshotting the actual running
 demo with a headless browser — not just once at the end. That process

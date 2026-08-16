@@ -10,7 +10,7 @@
 import type { CSSProperties } from "react";
 import type { AdElement, AdSpec, DegradationRecord, NormalizedSurfaceProfile, ResolvedBox, ResolvedLayout, SurfaceProfile } from "./types";
 import { normalizeSurfaceProfile } from "./validate";
-import { buttonFontSize } from "./measure";
+import { buttonFontSize, measureButtonLabelWidth } from "./measure";
 
 interface RenderedSurfaceProps {
   spec: AdSpec;
@@ -33,6 +33,13 @@ export function RenderedSurface({ spec, layout, surface }: RenderedSurfaceProps)
   return (
     <div
       className="surface-canvas"
+      data-surface-id={layout.surfaceId}
+      data-presentation={layout.presentation}
+      data-strategy={layout.strategy}
+      data-coverage-x={layout.composition.coverageX}
+      data-coverage-y={layout.composition.coverageY}
+      data-balance-x={layout.composition.balanceX}
+      data-balance-y={layout.composition.balanceY}
       style={{
         width: normalized.width,
         height: normalized.height,
@@ -50,7 +57,16 @@ export function RenderedSurface({ spec, layout, surface }: RenderedSurfaceProps)
       {layout.boxes.map((box) => {
         const element = elementsById.get(box.id);
         if (!element) return null;
-        return <ElementBox key={box.id} box={box} element={element} degradations={layout.degradations} surface={normalized} />;
+        return (
+          <ElementBox
+            key={box.id}
+            box={box}
+            element={element}
+            degradations={layout.degradations}
+            surface={normalized}
+            presentation={layout.presentation}
+          />
+        );
       })}
     </div>
   );
@@ -61,11 +77,13 @@ function ElementBox({
   element,
   degradations,
   surface,
+  presentation,
 }: {
   box: ResolvedBox;
   element: AdElement;
   degradations: DegradationRecord[];
   surface: NormalizedSurfaceProfile;
+  presentation: ResolvedLayout["presentation"];
 }) {
   const base: CSSProperties = {
     position: "absolute",
@@ -84,6 +102,8 @@ function ElementBox({
     return (
       <div
         className={`el-text el-role-${element.role}`}
+        data-element-id={element.id}
+        data-role={element.role}
         style={{ ...base, fontSize, lineHeight: `${box.height}px` }}
         title={element.content}
       >
@@ -96,7 +116,7 @@ function ElementBox({
   if (element.type === "image" && element.role === "branding") {
     const fontSize = Math.max(8, Math.min(box.width, box.height) * 0.22);
     return (
-      <div className="el-brandmark" style={{ ...base, fontSize }} title={element.alt}>
+      <div className="el-brandmark" data-element-id={element.id} data-role={element.role} style={{ ...base, fontSize }} title={element.alt}>
         <span>{element.alt}</span>
       </div>
     );
@@ -105,7 +125,7 @@ function ElementBox({
   if (element.type === "image") {
     const cropped = !!findDegradation(degradations, box.id, ["crop"]);
     return (
-      <div className={`el-image el-role-${element.role}`} style={base} title={element.alt}>
+      <div className={`el-image el-role-${element.role}`} data-element-id={element.id} data-role={element.role} style={base} title={element.alt}>
         <span>
           {element.alt}
           {cropped ? " — cropped" : ""}
@@ -126,11 +146,21 @@ function ElementBox({
   const mergedContent = !isIconOnly ? findDegradation(degradations, box.id, ["merge"])?.mergedContent : undefined;
   const isShortened = !isIconOnly && !mergedContent && !!findDegradation(degradations, box.id, ["shorten"]) && !!element.shortLabel;
   const activeLabel = isIconOnly ? element.icon! : mergedContent ?? (isShortened ? element.shortLabel! : element.label);
+  const baseFontSize = buttonFontSize(surface);
+  const desiredFontSize = presentation === "frame-fill" ? Math.max(baseFontSize, Math.min(box.height * 0.38, 32)) : baseFontSize;
+  const labelWidthAtBase = measureButtonLabelWidth(activeLabel, surface, baseFontSize);
+  const fitFontSize = labelWidthAtBase > 0 ? baseFontSize * (Math.max(0, box.width - 32) / labelWidthAtBase) : desiredFontSize;
+  const renderedFontSize = Math.max(baseFontSize, Math.min(desiredFontSize, fitFontSize));
 
   return (
     <button
       className="el-button"
-      style={{ ...base, fontSize: buttonFontSize(surface) }}
+      data-element-id={element.id}
+      data-role={element.role}
+      style={{
+        ...base,
+        fontSize: renderedFontSize,
+      }}
       aria-label={isIconOnly ? element.label : undefined}
     >
       {activeLabel}

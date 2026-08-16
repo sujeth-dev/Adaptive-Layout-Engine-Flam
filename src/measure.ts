@@ -56,6 +56,14 @@ export function buttonFontSize(surface: NormalizedSurfaceProfile): number {
   return Math.max(15, surface.minTextSize * 0.8);
 }
 
+export function measureButtonLabelWidth(
+  label: string,
+  surface: NormalizedSurfaceProfile,
+  fontSize = buttonFontSize(surface),
+): number {
+  return measureTextWidth(label, fontSize, SANS_STACK, 600);
+}
+
 function measureText(el: Extract<AdElement, { type: "text" }>, surface: NormalizedSurfaceProfile, variant: ContentVariant): ElementMeasurement {
   const activeContent = variant === "short" && el.shortContent ? el.shortContent : el.content;
   const baseFontSize = el.role === "primary" ? 22 : 15;
@@ -117,7 +125,7 @@ function measureButton(el: Extract<AdElement, { type: "button" }>, surface: Norm
   const padding = 16;
   const activeLabel = variant === "icon" && el.icon ? el.icon : variant === "short" && el.shortLabel ? el.shortLabel : el.label;
 
-  const textWidth = measureTextWidth(activeLabel, fontSize, SANS_STACK, 600);
+  const textWidth = measureButtonLabelWidth(activeLabel, surface, fontSize);
   const prefWidth = textWidth + padding * 2;
   // tap target is a hard floor on BOTH dimensions once the surface declares one
   const minHeight = Math.max(fontSize * LINE_HEIGHT_FACTOR, surface.minTapTarget);
@@ -158,8 +166,8 @@ export function measureAll(elements: AdElement[], surface: NormalizedSurfaceProf
   }));
 }
 
-/** Deterministic content order used by every strategy — semantic (role), not surface-driven.
- * Branding sorts first: a logo reads as a small masthead mark, not the last thing in the flow. */
+/** Role order is deliberately reserved for degradation tie-breaking. Layout flow uses
+ * the authored spec order, which is the creative's declared reading order. */
 export const ROLE_ORDER: Record<string, number> = {
   branding: 0,
   hero: 1,
@@ -169,11 +177,7 @@ export const ROLE_ORDER: Record<string, number> = {
 };
 
 export function inContentOrder(items: MeasuredElement[]): MeasuredElement[] {
-  return [...items].sort((a, b) => {
-    const roleDiff = (ROLE_ORDER[a.element.role] ?? 99) - (ROLE_ORDER[b.element.role] ?? 99);
-    if (roleDiff !== 0) return roleDiff;
-    return a.element.priority - b.element.priority;
-  });
+  return [...items];
 }
 
 export { GAP };

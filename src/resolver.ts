@@ -16,11 +16,13 @@
 import type {
   AdElement,
   AdSpec,
+  CompositionMetrics,
   DegradationRecord,
   LayoutCandidate,
   MeasuredElement,
   NormalizedSurfaceProfile,
   OmittedElement,
+  PresentationVariant,
   ResolveResult,
   ResolvedLayout,
   Rect,
@@ -29,16 +31,18 @@ import type {
 import { normalizeSurfaceProfile, validateAdSpec, validateCandidate, validateSurfaceProfile } from "./validate";
 import { GAP, ROLE_ORDER, measureAll, measureElement } from "./measure";
 import { STRATEGIES } from "./strategies";
-import { scoreCandidate } from "./score";
+import { evaluateComposition, scoreCandidate } from "./score";
 
 // Progressively tighter gaps tried by the global spacing-compaction rung, after the
 // default (comfortable) GAP fails and before any element's content/geometry degrades.
 const COMPACT_GAPS = [10, 6];
 
 interface Attempt {
-  best: { candidate: LayoutCandidate; score: number } | null;
+  best: { candidate: LayoutCandidate; score: number; composition: CompositionMetrics } | null;
   trace: string[];
 }
+
+const PRESENTATIONS: PresentationVariant[] = ["natural", "frame-fill"];
 
 /** Tries every strategy once against the current pool. This IS the "reposition" step —
  * every attempt regenerates candidates from scratch across all strategies, so degradation
@@ -51,25 +55,36 @@ function attemptResolution(
   gap: number,
 ): Attempt {
   const trace: string[] = [];
-  const measuredById = new Map(pool.map((p) => [p.element.id, p.measurement]));
+  const measuredById = new Map(
+    pool.map((item) => [
+      item.element.id,
+      item.element.type === "text" && !item.truncated
+        ? { ...item.measurement, minWidth: item.measurement.prefWidth }
+        : item.measurement,
+    ]),
+  );
   const elementsById = new Map(pool.map((p) => [p.element.id, p.element]));
-  let best: { candidate: LayoutCandidate; score: number } | null = null;
+  let best: { candidate: LayoutCandidate; score: number; composition: CompositionMetrics } | null = null;
 
   for (const strategy of STRATEGIES) {
-    const candidate = pool.length > 0 ? strategy(pool, rect, gap) : null;
-    if (!candidate) {
-      continue;
-    }
-    const validation = validateCandidate(candidate, measuredById, elementsById, surface, rect);
-    if (!validation.valid) {
-      const extra = validation.reasons.length > 1 ? ` (+${validation.reasons.length - 1} more)` : "";
-      trace.push(`${candidate.strategy} → rejected: ${validation.reasons[0]}${extra}`);
-      continue;
-    }
-    const score = scoreCandidate(candidate, pool, allElements, rect);
-    trace.push(`${candidate.strategy} → score ${score.toFixed(3)}`);
-    if (!best || score > best.score) {
-      best = { candidate, score };
+    for (const presentation of PRESENTATIONS) {
+      const candidate = pool.length > 0 ? strategy(pool, rect, gap, presentation) : null;
+      if (!candidate) continue;
+      const label = `${candidate.strategy}/${candidate.presentation}`;
+      const validation = validateCandidate(candidate, measuredById, elementsById, surface, rect);
+      if (!validation.valid) {
+        const extra = validation.reasons.length > 1 ? ` (+${validation.reasons.length - 1} more)` : "";
+        trace.push(`${label} → rejected: ${validation.reasons[0]}${extra}`);
+        continue;
+      }
+      const composition = evaluateComposition(candidate, rect);
+      const score = scoreCandidate(candidate, pool, allElements, rect, composition);
+      trace.push(
+        `${label} → score ${score.toFixed(3)}; coverage ${(composition.coverageX * 100).toFixed(0)}%×${(composition.coverageY * 100).toFixed(0)}%`,
+      );
+      if (!best || score > best.score) {
+        best = { candidate, score, composition };
+      }
     }
   }
 
@@ -119,17 +134,21 @@ function diffContentDegradations(initialPool: MeasuredElement[], finalPool: Meas
 
 function buildSuccess(
   surfaceId: string,
-  best: { candidate: LayoutCandidate; score: number },
+  best: { candidate: LayoutCandidate; score: number; composition: CompositionMetrics },
   initialPool: MeasuredElement[],
   finalPool: MeasuredElement[],
   omitted: OmittedElement[],
   explicitDegradations: DegradationRecord[],
   trace: string[],
 ): ResolveResult {
-  trace.push(`winner: ${best.candidate.strategy} (score ${best.score.toFixed(3)})`);
+  trace.push(
+    `winner: ${best.candidate.strategy}/${best.candidate.presentation} (score ${best.score.toFixed(3)}, coverage ${(best.composition.coverageX * 100).toFixed(0)}%×${(best.composition.coverageY * 100).toFixed(0)}%)`,
+  );
   const layout: ResolvedLayout = {
     surfaceId,
     strategy: best.candidate.strategy,
+    presentation: best.candidate.presentation,
+    composition: best.composition,
     score: best.score,
     boxes: best.candidate.boxes,
     omitted,
@@ -336,6 +355,7 @@ export function resolveLayout(spec: AdSpec, surfaceInput: SurfaceProfile): Resol
       const beforeShrink = getItem(pool, id);
       if (
         beforeShrink &&
+        beforeShrink.element.type !== "text" &&
         (beforeShrink.measurement.prefWidth > beforeShrink.measurement.minWidth ||
           beforeShrink.measurement.prefHeight > beforeShrink.measurement.minHeight)
       ) {
