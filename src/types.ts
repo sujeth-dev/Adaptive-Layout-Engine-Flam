@@ -21,6 +21,10 @@ interface BaseElement {
 export interface TextElement extends BaseElement {
   type: "text";
   content: string;
+  /** shorter content variant, tried before the existing truncate-to-ellipsis rung
+   * degrades this same element further. Optional — an element without one just goes
+   * straight to truncation, exactly like before this field existed. */
+  shortContent?: string;
 }
 
 export interface ImageElement extends BaseElement {
@@ -28,18 +32,38 @@ export interface ImageElement extends BaseElement {
   alt: string;
   /** preferred width / height, e.g. 1.5 for a landscape hero shot */
   aspectRatio?: number;
+  /** tighter aspect ratio to switch to when heavily constrained — a focal-point
+   * crop that keeps the subject framed instead of squeezing the original ratio
+   * into a sliver. Optional — an image without one only ever shrinks, as before. */
+  croppedAspectRatio?: number;
 }
 
 export interface ButtonElement extends BaseElement {
   type: "button";
   label: string;
+  /** shorter label, tried before collapsing to icon-only */
+  shortLabel?: string;
+  /** icon-only glyph; rendering this state keeps `label` as the accessible name */
+  icon?: string;
 }
 
 export type AdElement = TextElement | ImageElement | ButtonElement;
 
+/** Declarative cross-element merge: when a surface is tight enough that both
+ * `sourceIds` and `targetId` are being degraded, try removing `sourceIds` from the
+ * pool and swapping `targetId`'s rendered content for `mergedLabel` instead of
+ * degrading them independently. Fully generic — the resolver never references
+ * specific element ids, only whatever a spec declares here. */
+export interface ElementMerge {
+  sourceIds: string[];
+  targetId: string;
+  mergedLabel: string;
+}
+
 export interface AdSpec {
   id: string;
   elements: AdElement[];
+  merges?: ElementMerge[];
 }
 
 // ---------------------------------------------------------------------------
@@ -104,12 +128,23 @@ export interface OmittedElement {
   reason: string;
 }
 
-export type DegradationAction = "shrink" | "truncate" | "reposition" | "drop";
+export type DegradationAction =
+  | "shrink"
+  | "truncate"
+  | "reposition"
+  | "drop"
+  | "shorten"
+  | "iconify"
+  | "crop"
+  | "merge"
+  | "compact-spacing";
 
 export interface DegradationRecord {
   id: string;
   action: DegradationAction;
   detail: string;
+  /** action:"merge" only — the new content the target box renders (e.g. "Buy $30") */
+  mergedContent?: string;
 }
 
 export interface ResolvedLayout {
@@ -152,11 +187,22 @@ export interface ElementMeasurement {
   prefHeight: number;
 }
 
+/** "full" = original content, "short" = shortContent/shortLabel, "icon" = icon-only
+ * (buttons only). Drives both what measure.ts measures and what render-dom paints —
+ * a single source of truth so the two can never disagree on which text is active. */
+export type ContentVariant = "full" | "short" | "icon";
+
 export interface MeasuredElement {
   element: AdElement;
   measurement: ElementMeasurement;
   /** true once truncation has been applied by the degradation ladder */
   truncated: boolean;
+  /** which content variant is currently active for this element */
+  contentVariant: ContentVariant;
+  /** true once the image's croppedAspectRatio has been applied by the ladder */
+  cropped: boolean;
+  /** true once this element's preferred size has been collapsed to its minimum */
+  shrunk: boolean;
 }
 
 export interface LayoutCandidate {

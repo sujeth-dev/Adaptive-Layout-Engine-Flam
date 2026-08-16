@@ -45,10 +45,21 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
   }
 
   const rect = { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
+  // An element can carry MULTIPLE simultaneous degradation records (e.g. a button
+  // iconified in one rung, then also shrunk in a later rung) — check each action
+  // category independently rather than collapsing all of an id's records into one.
+  const hasAction = (id: string, action: string) => layout.degradations.some((d) => d.id === id && d.action === action);
   for (const el of spec.elements) {
     const box = layout.boxes.find((b) => b.id === el.id);
-    if (!box) continue; // omitted, checked separately below
-    const measurement = measureElement(el, normalized, rect);
+    if (!box) continue; // omitted or merged away, checked separately below
+    // A merge target's rendered content is no longer this element's own — the merge
+    // itself is the resolver's decision to change content, same category as a drop, so
+    // the per-element floor check (which assumes THIS element's own content) doesn't
+    // apply; bounds/overlap/positive-geometry below still fully apply regardless.
+    if (hasAction(el.id, "merge")) continue;
+    const variant = hasAction(el.id, "iconify") ? "icon" : hasAction(el.id, "shorten") ? "short" : "full";
+    const cropped = hasAction(el.id, "crop");
+    const measurement = measureElement(el, normalized, rect, variant, cropped);
     if (box.width < measurement.minWidth - 0.5) {
       violations.push(`${el.id}: width ${box.width.toFixed(1)} below floor ${measurement.minWidth.toFixed(1)}`);
     }
@@ -58,6 +69,15 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
     if (el.type === "button" && normalized.minTapTarget > 0) {
       if (box.width < normalized.minTapTarget - 0.5 || box.height < normalized.minTapTarget - 0.5) {
         violations.push(`${el.id}: violates minTapTarget=${normalized.minTapTarget}`);
+      }
+    }
+  }
+
+  for (const merge of spec.merges ?? []) {
+    if (!hasAction(merge.targetId, "merge")) continue;
+    for (const sourceId of merge.sourceIds) {
+      if (layout.boxes.some((b) => b.id === sourceId)) {
+        violations.push(`${sourceId}: merged into "${merge.targetId}" but still present in boxes`);
       }
     }
   }

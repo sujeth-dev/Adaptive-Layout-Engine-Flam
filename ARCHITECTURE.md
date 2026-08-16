@@ -78,6 +78,39 @@ and gets rejected, while `horizontal-band` genuinely fits it.
 A strategy returns `null` (not broken geometry) when it can't produce a
 sensible candidate at all — e.g. zero visible elements.
 
+## Measurement and text sizing
+
+`measure.ts` estimates every element's min/preferred box size before any
+strategy runs. Two things about it matter enough to call out explicitly:
+
+- **Real text measurement, not a character-count guess.** `measureTextWidth()`
+  uses `CanvasRenderingContext2D.measureText()` with a font string built from
+  the same family/weight the CSS actually renders (`--font-serif`/`--font-sans`
+  in `App.css` — kept in sync by comment, not by import, since `measure.ts`
+  stays framework/DOM-independent by design). This runs in any real browser.
+  In Node (the test/fuzz suite), no canvas exists, so it falls back to a
+  character-count estimate — deliberately tuned as a slight *overestimate*
+  (`AVG_CHAR_WIDTH_FACTOR = 0.62`), so a box that "just barely" fits by the
+  estimate still has a little real slack once actual glyphs render, instead of
+  silently overflowing into `text-overflow: ellipsis` while the resolver
+  reports zero degradation. That gap — a box computed to *exactly* its
+  preferred width via a too-tight estimate, then visibly clipped by the real
+  browser font — was a genuine bug caught by screenshotting the running demo,
+  not a hypothetical.
+- **`buttonFontSize()` is a single shared function**, called by both
+  `measure.ts` (to size the button's box) and `render-dom.tsx` (to render the
+  label). Earlier, `render-dom.tsx` derived the button's font size independently
+  from `box.height` (`box.height * 0.4`) instead of reusing the value
+  `measure.ts` had actually assumed when it computed the box's *width* — the
+  two numbers didn't agree, so a button could be sized for a 15px label and
+  then rendered at 17.6px, wrapping "Shop Now" onto two lines inside a fixed-
+  height pill. Sharing one function removes the possibility of that drift by
+  construction, rather than by convention. `measureButton()`'s `minWidth` is
+  also now a hard floor of "the label fits on one line at this exact font
+  size" (`prefWidth`, not an arbitrary shrink fraction of it) — a button can
+  still shrink toward its tap-target floor in height, but never becomes
+  narrower than its own text needs.
+
 ## Candidate validation
 
 Validation happens in a separate pass from generation, on purpose:
@@ -128,26 +161,84 @@ inline magic numbers through the scoring functions.
 
 ## Degradation
 
-`resolver.ts` builds a `degradeOrder`: every element sorted by priority
-descending (lowest priority first), ties broken by id for determinism. It
-then walks that order and, per element, tries in sequence:
+`resolver.ts` groups elements into **priority tiers** (elements sharing a
+priority value), processed lowest-priority-tier-first — "lowest priority
+degrades first." One rung runs once, globally, before any tier is touched;
+the rest run per tier, in this order:
 
-1. **shrink** — set preferred size to measured minimum, retry full
-   candidate generation.
-2. **truncate** (text only) — mark the element truncated (affects
-   rendering + score), retry.
-3. **drop** (skipped entirely for priority-1 elements) — remove the
+0. **compact spacing** (once, globally) — retry with progressively tighter
+   gaps (`14px → 10px → 6px`) before touching any element's content or
+   geometry at all. `gap` is threaded as a parameter through every strategy
+   in `strategies.ts` (not a fixed constant), so this is still a pure
+   function of the attempt, never surface-branched.
+1. **merge** (declared button targets only) — if the spec declares an
+   `ElementMerge` (e.g. fold `price` into `cta` as "Buy $30"), and the
+   source elements are still present and none is priority-1, try removing
+   the sources and swapping the target's content. Fully generic:
+   `resolver.ts` only ever reads `spec.merges`, never a specific element id
+   — a spec with no merges behaves exactly as if this rung didn't exist.
+2. **shorten** — switch to a `shortContent`/`shortLabel` variant, if the
+   spec declares one for this element and a merge hasn't already replaced
+   its content.
+3. **iconify** (buttons only) — collapse to an `icon` glyph, if declared.
+4. **shrink** — set preferred size to measured minimum, retry.
+5. **truncate** (text only) — mark truncated (affects rendering + score), retry.
+6. **crop** (hero images only) — switch to `croppedAspectRatio`, if
+   declared, retry.
+7. **drop** (skipped entirely for priority-1 elements) — remove the
    element, record why, retry.
 
-State is cumulative: an element shrunk in one pass stays shrunk while the
-next lower-priority element is degraded. This is why "reposition" isn't a
-separate rung in the code — every retry already regenerates all 4
-candidates from scratch against the (now smaller) pool, which *is*
-repositioning.
+State is cumulative throughout: an element shortened/shrunk in one rung
+stays that way while later rungs run. This is why "reposition" isn't a
+separate rung — every retry already regenerates all 4 candidates from
+scratch against the (now-changed) pool, which *is* repositioning.
 
-Priority-1 elements go through the same loop and can shrink, but the drop
-branch is unconditionally skipped for them — enforcing "priority-1 never
-drops from a successful layout" structurally, not by convention.
+Priority-1 elements go through every content/geometry rung and can
+shorten/shrink/truncate/crop, but the drop branch — and merges that would
+remove a priority-1 source — are unconditionally skipped for them,
+enforcing "priority 1 never drops from a successful layout" structurally,
+not by convention.
+
+All of the new fields driving this (`shortContent`, `shortLabel`, `icon`,
+`croppedAspectRatio`, `AdSpec.merges`) are **optional and additive** — a
+spec that declares none of them degrades exactly as it did before this
+existed (pure shrink → truncate → drop).
+
+### Recording what actually happened, honestly
+
+Recording "the one rung whose own attempt succeeded" turned out to be an
+incomplete story: state is cumulative, so an *earlier* element can be left
+silently shortened/shrunk by an attempt that ultimately failed, while a
+*different*, later element's rung is what actually succeeds — a per-rung
+record would miss that earlier element's change entirely. This was caught
+by the fuzz suite (`assertInvariants` failing with a false "below floor"
+report once shortened content was involved) after this feature landed, not
+guessed in advance.
+
+The fix: `buildSuccess()` diffs the pool's state at the moment of success
+against its state at the very start of resolution
+(`diffContentDegradations()`), and reports every element whose
+shrunk/truncated/contentVariant/cropped state actually changed — regardless
+of which specific rung's attempt happened to be the one that succeeded.
+`drop` and `merge` still have to be recorded explicitly at the point they
+happen (they remove elements from the pool entirely, so they can't be
+recovered by diffing pool membership by id afterward), but the merge case
+is *also* covered by the diff as a fallback (a button's `label` differing
+from its original spec value implies a merge happened), for the same
+"cumulative but not the rung that succeeded" reason.
+
+One more consequence worth naming: **a single element can carry multiple
+simultaneous degradation records** — e.g. a button both `merge`d and then
+`iconify`d in the same resolve. Every consumer of `layout.degradations`
+(the invariant checker, `render-dom.tsx`) looks up records by *action
+category*, never by id alone (a naive `Map` keyed by id silently collapses
+multiple records for the same element down to one, which is exactly the bug
+this section describes catching). `render-dom.tsx` in particular resolves
+rendering precedence by degradation *depth* — icon-only wins over merge,
+which wins over shorten, which wins over the original content — because
+that's the same precedence `measure.ts` used when it sized the box; getting
+this wrong reproduces the exact "box too small for its own label" class of
+bug described in [Measurement and text sizing](#measurement-and-text-sizing).
 
 ## Failure semantics
 
@@ -184,13 +275,23 @@ compiler will hold them to it.
   rectangle" concept the resolver already consumes. No new layout path
   needed, only a new way to compute `Rect` from a print-oriented profile.
 
-## One deliberate non-rule-violation worth flagging
+## Deliberate non-rule-violations worth flagging
 
-`src/App.css` has a single `@media (max-width: 1000px)` query. It stacks
-the demo's own three control panels (surface picker / preview / trace) on
-narrow browser windows. It is UI chrome for *this repository's demo
-harness*, not the ad layout engine — every ad element's position comes from
-inline styles computed directly from `ResolvedBox` coordinates in
-`render-dom.tsx`, completely independent of viewport size or any media
-query. The assignment's "no media-query layout engine" rule is about how
-the *ad* is composed, and this query never touches that.
+`src/App.css` has two `@media` queries, neither of which is an ad-layout
+media query:
+
+- `@media (max-width: 1000px)` recomposes the demo's own three panels
+  (surface picker / preview / trace) for narrow browser windows — UI chrome
+  for *this repository's demo harness*, not the ad layout engine. Every ad
+  element's position still comes from inline styles computed directly from
+  `ResolvedBox` coordinates in `render-dom.tsx`, completely independent of
+  viewport size or any media query.
+- `@media (prefers-reduced-motion: reduce)` disables CSS transitions
+  (hover states, the copy-trace success flash, the trace disclosure chevron)
+  for users who've asked the OS for less motion. It only ever touches
+  `transition`, never `position`/`width`/`height`/`font-size` — it cannot
+  change where or how big anything renders, so it carries no layout
+  decision at all.
+
+The assignment's "no media-query layout engine" rule is about how the *ad*
+is composed; neither query touches that.
