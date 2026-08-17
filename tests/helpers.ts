@@ -1,10 +1,10 @@
-// Shared invariant checker used by both the targeted resolver tests and the
-// fuzz suite. findInvariantViolations returns a list of plain-English
+// Shared invariant checker used by targeted resolver tests, checkpoint tests,
+// and the fuzz suite. findInvariantViolations returns a list of plain-English
 // problems (empty = clean) so fuzz can keep going across hundreds of random
 // surfaces instead of stopping at the first failure.
 
 import { expect } from "vitest";
-import { measureElement } from "../src/measure";
+import { measureActiveContentWidth, measureElement } from "../src/measure";
 import { evaluateComposition } from "../src/score";
 import { normalizeSurfaceProfile } from "../src/validate";
 import type { AdSpec, ResolvedLayout, SurfaceProfile } from "../src/types";
@@ -18,6 +18,7 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
     right: normalized.width - normalized.safeArea.right,
     bottom: normalized.height - normalized.safeArea.bottom,
   };
+  const rect = { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
 
   for (const box of layout.boxes) {
     if (box.width <= 0 || box.height <= 0) {
@@ -45,7 +46,6 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
     }
   }
 
-  const rect = { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
   const recomputedComposition = evaluateComposition(
     { strategy: layout.strategy, presentation: layout.presentation, boxes: layout.boxes },
     rect,
@@ -58,24 +58,27 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
       violations.push(`composition.${key} must be normalized, got ${layout.composition[key]}`);
     }
   }
-  // An element can carry MULTIPLE simultaneous degradation records (e.g. a button
-  // iconified in one rung, then also shrunk in a later rung) — check each action
-  // category independently rather than collapsing all of an id's records into one.
-  const hasAction = (id: string, action: string) => layout.degradations.some((d) => d.id === id && d.action === action);
+
+  const elementsById = new Map(spec.elements.map((el) => [el.id, el]));
+  const brandBox = layout.boxes.find((b) => elementsById.get(b.id)?.role === "branding");
+  const heroBox = layout.boxes.find((b) => elementsById.get(b.id)?.role === "hero");
+  const headlineBox = layout.boxes.find((b) => elementsById.get(b.id)?.role === "primary");
+  function overlaps(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) {
+    const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+    const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+    return overlapX > 0.01 && overlapY > 0.01;
+  }
+  if (brandBox && heroBox && overlaps(brandBox, heroBox)) violations.push(`brand overlaps hero`);
+  if (brandBox && headlineBox && overlaps(brandBox, headlineBox)) violations.push(`brand overlaps headline`);
+
   for (const el of spec.elements) {
     const box = layout.boxes.find((b) => b.id === el.id);
-    if (!box) continue; // omitted or merged away, checked separately below
-    // A merge target's rendered content is no longer this element's own — the merge
-    // itself is the resolver's decision to change content, same category as a drop, so
-    // the per-element floor check (which assumes THIS element's own content) doesn't
-    // apply; bounds/overlap/positive-geometry below still fully apply regardless.
-    if (hasAction(el.id, "merge")) continue;
-    const variant = hasAction(el.id, "iconify") ? "icon" : hasAction(el.id, "shorten") ? "short" : "full";
-    const cropped = hasAction(el.id, "crop");
+    if (!box) continue; // omitted/hidden/dropped, checked separately below
+
+    const variant = box.presentation.variant;
+    const cropped = box.presentation.cropped;
     const measurement = measureElement(el, normalized, rect, variant, cropped);
-    if (el.type === "text" && !hasAction(el.id, "truncate") && box.width < measurement.prefWidth - 0.5) {
-      violations.push(`${el.id}: untruncated width ${box.width.toFixed(1)} below measured content ${measurement.prefWidth.toFixed(1)}`);
-    }
+
     if (box.width < measurement.minWidth - 0.5) {
       violations.push(`${el.id}: width ${box.width.toFixed(1)} below floor ${measurement.minWidth.toFixed(1)}`);
     }
@@ -87,13 +90,37 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
         violations.push(`${el.id}: violates minTapTarget=${normalized.minTapTarget}`);
       }
     }
-  }
 
-  for (const merge of spec.merges ?? []) {
-    if (!hasAction(merge.targetId, "merge")) continue;
-    for (const sourceId of merge.sourceIds) {
-      if (layout.boxes.some((b) => b.id === sourceId)) {
-        violations.push(`${sourceId}: merged into "${merge.targetId}" but still present in boxes`);
+    // Resolved font floor + genuine fit: text/button elements must carry a resolved
+    // fontSize at or above the surface's floor, and their active content must
+    // actually fit the box at that exact font size — no silent renderer ellipsis.
+    if (el.type === "text" || el.type === "button") {
+      const fontSize = box.presentation.fontSize;
+      if (fontSize === undefined) {
+        violations.push(`${el.id}: missing resolved fontSize`);
+      } else {
+        if (fontSize < normalized.minTextSize - 0.01) {
+          violations.push(`${el.id}: resolved fontSize ${fontSize.toFixed(1)} below minTextSize ${normalized.minTextSize}`);
+        }
+        const activeWidth = measureActiveContentWidth(el, variant, fontSize);
+        const horizontalBudget = el.type === "button" ? box.width - 32 : box.width;
+        if (activeWidth > horizontalBudget + 1) {
+          violations.push(`${el.id}: active "${variant}" content (${activeWidth.toFixed(1)}px) does not fit its box (${horizontalBudget.toFixed(1)}px)`);
+        }
+      }
+    }
+
+    // Hero aspect/crop validity: the resolved box's aspect ratio must match the
+    // declared aspect for whichever state (original/cropped) is presently active —
+    // geometry may change, but the hero is never stretched or squashed. Branding
+    // is intentionally NOT aspect-locked — it's sized as a compact wordmark box,
+    // not a strictly proportional image (matches validate.ts's hard check scope).
+    if (el.type === "image" && el.role === "hero") {
+      const useCropped = cropped && el.croppedAspectRatio && el.croppedAspectRatio > 0;
+      const expectedAspect = useCropped ? el.croppedAspectRatio! : el.aspectRatio && el.aspectRatio > 0 ? el.aspectRatio : 1;
+      const actualAspect = box.width / box.height;
+      if (Math.abs(actualAspect - expectedAspect) / expectedAspect > 0.02) {
+        violations.push(`${el.id}: aspect ratio ${actualAspect.toFixed(3)} does not match declared ${expectedAspect.toFixed(3)}`);
       }
     }
   }
@@ -102,6 +129,11 @@ export function findInvariantViolations(layout: ResolvedLayout, surface: Surface
   for (const id of priorityOneIds) {
     if (layout.omitted.some((o) => o.id === id)) violations.push(`priority-1 element "${id}" was omitted`);
     if (!layout.boxes.some((b) => b.id === id)) violations.push(`priority-1 element "${id}" missing from boxes`);
+  }
+
+  const ctaSpec = spec.elements.find((e) => e.role === "action");
+  if (ctaSpec) {
+    if (layout.omitted.some((o) => o.id === ctaSpec.id)) violations.push(`CTA "${ctaSpec.id}" was omitted — CTA must never drop`);
   }
 
   return violations;
