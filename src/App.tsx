@@ -1,30 +1,28 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { demoAd } from "./spec";
-import { broadcastLowerThird, mobileLandscape, mobilePortrait, retailKiosk } from "./surfaces";
+import { broadcastLowerThird, constrainedStrip, mobileLandscape, mobilePortrait, retailKiosk } from "./surfaces";
 import { resolveLayout } from "./resolver";
 import { RenderedSurface } from "./render-dom";
-import type { DegradationAction, SafeArea, SurfaceProfile, ViewingDistance } from "./types";
+import CheckpointGallery from "./CheckpointGallery";
+import type {
+  CandidateDiagnostic,
+  ContinuityHint,
+  DegradationAction,
+  ElementRole,
+  ResolvedLayout,
+  ResolveResult,
+  SafeArea,
+  SurfaceProfile,
+  ViewingDistance,
+} from "./types";
 import "./App.css";
-
-// This is UI wiring only — labels/ids here are for the picker, never consumed
-// by the resolver as a layout decision. The shallow profile deliberately drives
-// lower-priority content through merge + iconify while the priority-1 headline
-// and hero, plus an accessible CTA, remain visible.
-const constrainedBanner: SurfaceProfile = {
-  id: "constrainedBanner",
-  width: 510,
-  height: 90,
-  safeArea: { top: 8, right: 8, bottom: 8, left: 8 },
-  minTapTarget: 40,
-  minTextSize: 11,
-};
 
 const PRESETS: { id: string; label: string; profile: SurfaceProfile }[] = [
   { id: "mobilePortrait", label: "Mobile Portrait", profile: mobilePortrait },
   { id: "mobileLandscape", label: "Mobile Landscape", profile: mobileLandscape },
   { id: "broadcastLowerThird", label: "Broadcast Lower-Third", profile: broadcastLowerThird },
   { id: "retailKiosk", label: "Square Kiosk", profile: retailKiosk },
-  { id: "constrainedBanner", label: "Constrained (degradation demo)", profile: constrainedBanner },
+  { id: "constrainedStrip", label: "Constrained Strip", profile: constrainedStrip },
 ];
 
 // The frame the preview renders inside. Surfaces smaller than the frame get a
@@ -38,71 +36,49 @@ const SAFE_AREA_SIDES = ["top", "right", "bottom", "left"] as const;
 
 const DEGRADE_GLYPH: Record<DegradationAction, string> = {
   shrink: "▾",
-  truncate: "…",
   drop: "✕",
-  reposition: "↻",
-  shorten: "✂",
-  iconify: "◇",
+  hide: "◻",
+  compact: "✂",
   crop: "⛶",
-  merge: "⋈",
   "compact-spacing": "↔",
 };
 
-interface Rejection {
-  strategy: string;
-  reason: string;
+function lastAttemptCandidates(attempts: ResolvedLayout["attempts"]): CandidateDiagnostic[] {
+  return attempts.length ? attempts[attempts.length - 1]!.candidates : [];
 }
 
-/** Rejections from the winning attempt only — "what else was tried at the geometry
- * that ultimately worked," not a dump of every rejection across every degradation
- * rung. Pure display-layer parsing of the resolver's own trace strings — resolver.ts
- * is untouched, this just reads the human-readable trace it already produces. */
-function lastAttemptRejections(trace: string[]): Rejection[] {
-  let start = -1;
-  for (let i = 0; i < trace.length; i++) {
-    if (trace[i]!.trimStart().startsWith("attempt ")) start = i;
+function deriveVariantByRole(layout: ResolvedLayout, elementsById: Map<string, { role: ElementRole }>) {
+  const map: Partial<Record<ElementRole, "full" | "compact">> = {};
+  for (const box of layout.boxes) {
+    const role = elementsById.get(box.id)?.role;
+    if (role) map[role] = box.presentation.variant;
   }
-  if (start === -1) return [];
-  const out: Rejection[] = [];
-  for (let i = start + 1; i < trace.length; i++) {
-    const line = trace[i]!.trim();
-    if (line.startsWith("winner:")) break;
-    const match = line.match(/^(.+?) → rejected: (.+)$/);
-    if (match) out.push({ strategy: match[1]!, reason: match[2]! });
-  }
-  return out;
-}
-
-type TraceRowType = "header" | "reject" | "winner" | "plain";
-interface TraceRow {
-  type: TraceRowType;
-  marker: string;
-  text: string;
-  indent: boolean;
-}
-
-function classifyTrace(trace: string[]): TraceRow[] {
-  return trace.map((raw) => {
-    const text = raw.trim();
-    const indent = raw.startsWith("  ");
-    if (text.startsWith("attempt ")) return { type: "header", marker: "", text, indent: false };
-    if (text.startsWith("winner:")) return { type: "winner", marker: "→", text, indent: false };
-    if (text.includes(" → rejected:")) return { type: "reject", marker: "✕", text, indent };
-    return { type: "plain", marker: "·", text, indent };
-  });
+  return map;
 }
 
 export default function App() {
   const [presetId, setPresetId] = useState("mobilePortrait");
   const [surface, setSurface] = useState<SurfaceProfile>(mobilePortrait);
   const [copied, setCopied] = useState(false);
+  const continuityRef = useRef<ContinuityHint | undefined>(undefined);
+  const elementsById = useMemo(() => new Map(demoAd.elements.map((el) => [el.id, el])), []);
 
-  const result = useMemo(() => resolveLayout(demoAd, surface), [surface]);
+  const result: ResolveResult = useMemo(() => resolveLayout(demoAd, surface, continuityRef.current), [surface]);
   const clipboardSupported = typeof navigator !== "undefined" && !!navigator.clipboard?.writeText;
+
+  useEffect(() => {
+    if (result.ok) {
+      continuityRef.current = {
+        previousStrategy: result.layout.strategy,
+        previousContentVariantByRole: deriveVariantByRole(result.layout, elementsById),
+      };
+    }
+  }, [result, elementsById]);
 
   function applyPreset(id: string) {
     const preset = PRESETS.find((p) => p.id === id);
     if (!preset) return;
+    continuityRef.current = undefined; // a preset jump is not a live drag — no hysteresis carried over
     setPresetId(id);
     setSurface(preset.profile);
   }
@@ -132,7 +108,7 @@ export default function App() {
   const fit = Math.min(1, PREVIEW_MAX_WIDTH / surface.width, PREVIEW_MAX_HEIGHT / surface.height);
   const scale = fit === 1 ? Math.min(PREVIEW_BOOST, PREVIEW_MAX_WIDTH / surface.width, PREVIEW_MAX_HEIGHT / surface.height) : fit;
 
-  const rejections = result.ok ? lastAttemptRejections(result.layout.trace) : [];
+  const candidates = result.ok ? lastAttemptCandidates(result.layout.attempts) : lastAttemptCandidates(result.attempts);
   const scorePct = result.ok ? Math.max(0, Math.min(1, result.layout.score)) * 100 : 0;
 
   return (
@@ -149,6 +125,8 @@ export default function App() {
         </div>
       </header>
 
+      <CheckpointGallery />
+
       <div className="app-body">
         <main className="panel preview">
           <div className="panel-head">
@@ -161,7 +139,7 @@ export default function App() {
                 {surface.width} <span>×</span> {surface.height}
               </p>
             </div>
-            {result.ok && <span className="strategy-pill">{result.layout.strategy} / {result.layout.presentation}</span>}
+            {result.ok && <span className="strategy-pill">{result.layout.strategy}</span>}
           </div>
           <div className="preview-stage" style={{ width: PREVIEW_MAX_WIDTH, height: PREVIEW_MAX_HEIGHT }}>
             <div className="preview-surface" style={{ width: surface.width * scale, height: surface.height * scale }}>
@@ -216,12 +194,12 @@ export default function App() {
               <span className="mono-label">Width</span>
               <span className="fval tabular">{surface.width}px</span>
             </div>
-            <input aria-label="Surface width" type="range" min={100} max={1920} value={surface.width} onChange={(e) => updateField("width", Number(e.target.value))} />
+            <input aria-label="Surface width" type="range" min={80} max={2200} value={surface.width} onChange={(e) => updateField("width", Number(e.target.value))} />
             <div className="field-row-line" style={{ marginTop: "var(--s3)" }}>
               <span className="mono-label">Height</span>
               <span className="fval tabular">{surface.height}px</span>
             </div>
-            <input aria-label="Surface height" type="range" min={80} max={1200} value={surface.height} onChange={(e) => updateField("height", Number(e.target.value))} />
+            <input aria-label="Surface height" type="range" min={80} max={1400} value={surface.height} onChange={(e) => updateField("height", Number(e.target.value))} />
           </div>
 
           <div className="rail-section">
@@ -244,7 +222,7 @@ export default function App() {
               <label className="field">
                 <span className="mono-label">
                   Min text size
-                  <span className="tip" tabIndex={0} data-tip="Smallest font size, in px, text is allowed to shrink to before truncation.">
+                  <span className="tip" tabIndex={0} data-tip="Smallest font size, in px, text is allowed to resolve to.">
                     °
                   </span>
                 </span>
@@ -341,14 +319,14 @@ export default function App() {
 
                 <div className="readout-grid">
                   <div>
-                    <p className="mono-label">Rejected ({rejections.length})</p>
-                    {rejections.length === 0 ? (
-                      <div className="empty-row">No rejected strategies — every candidate this attempt was valid.</div>
+                    <p className="mono-label">Winning rung — candidates ({candidates.length})</p>
+                    {candidates.length === 0 ? (
+                      <div className="empty-row">No candidates recorded.</div>
                     ) : (
-                      rejections.map((r, i) => (
-                        <div className="reject-row" key={`${r.strategy}-${i}`}>
-                          <span className="strategy">{r.strategy}</span>
-                          <span className="reason">{r.reason}</span>
+                      candidates.map((c, i) => (
+                        <div className="reject-row" key={`${c.strategy}-${i}`}>
+                          <span className="strategy">{c.strategy}</span>
+                          <span className="reason">{c.valid ? `score ${c.score!.toFixed(3)}` : c.rejectionReasons?.[0]}</span>
                         </div>
                       ))
                     )}
@@ -393,10 +371,9 @@ export default function App() {
                     <span className="chev">›</span> View full trace
                   </summary>
                   <div className="trace-log">
-                    {classifyTrace(result.layout.trace).map((row, i) => (
-                      <div key={i} className={`tl-row ${row.type}${row.indent ? " indent" : ""}`}>
-                        {row.marker && <span className="m">{row.marker}</span>}
-                        {row.text}
+                    {result.layout.trace.map((line, i) => (
+                      <div key={i} className="tl-row">
+                        {line}
                       </div>
                     ))}
                   </div>
@@ -421,10 +398,9 @@ export default function App() {
                     <span className="chev">›</span> View full trace
                   </summary>
                   <div className="trace-log">
-                    {classifyTrace(result.details).map((row, i) => (
-                      <div key={i} className={`tl-row ${row.type}${row.indent ? " indent" : ""}`}>
-                        {row.marker && <span className="m">{row.marker}</span>}
-                        {row.text}
+                    {result.details.map((line, i) => (
+                      <div key={i} className="tl-row">
+                        {line}
                       </div>
                     ))}
                   </div>

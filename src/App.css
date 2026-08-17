@@ -13,13 +13,11 @@
   --accent-soft: rgba(216, 68, 43, 0.11);
   --accent-soft-strong: rgba(216, 68, 43, 0.2);
   --shrink: #c79a4e;
-  --truncate: #b96a3e;
   --drop: #8b3a26;
-  --shorten: #a68a5b;
-  --iconify: #8f7a4a;
+  --hide: #8a7a63;
+  --content-compact: #a68a5b;
   --crop: #6f7a63;
-  --merge: #5c6f7a;
-  --compact: #9c9284;
+  --compact-spacing: #9c9284;
   --winner-tint: rgba(216, 68, 43, 0.07);
   --cta-fill: #2e2924;
 
@@ -50,7 +48,7 @@
 
   --r-edit: 0px;
   --r-sm: 3px;
-  --r-cta: 999px;
+  --r-cta: 5px;
   --r-ui: 10px;
   --r-media: 26px;
   --r-pill: 999px;
@@ -853,24 +851,19 @@ select:focus-visible {
   color: var(--ink);
 }
 
-.badge.truncate {
-  background: var(--truncate);
-  color: var(--paper);
-}
-
 .badge.drop {
   background: var(--drop);
   color: var(--paper);
 }
 
-.badge.shorten {
-  background: var(--shorten);
-  color: var(--ink);
+.badge.hide {
+  background: var(--hide);
+  color: var(--paper);
 }
 
-.badge.iconify {
-  background: var(--iconify);
-  color: var(--paper);
+.badge.compact {
+  background: var(--content-compact);
+  color: var(--ink);
 }
 
 .badge.crop {
@@ -878,18 +871,8 @@ select:focus-visible {
   color: var(--paper);
 }
 
-.badge.merge {
-  background: var(--merge);
-  color: var(--paper);
-}
-
 .badge.compact-spacing {
-  background: var(--compact);
-  color: var(--ink);
-}
-
-.badge.reposition {
-  background: var(--rule-strong);
+  background: var(--compact-spacing);
   color: var(--ink);
 }
 
@@ -1048,6 +1031,52 @@ select:focus-visible {
 
 .resolver-failure + .trace-disclosure {
   margin-top: var(--s4);
+}
+
+/* ============ checkpoint gallery ============ */
+.gallery {
+  margin-bottom: var(--s5);
+  border: 1px solid var(--rule);
+  padding: var(--s5);
+  background: var(--paper-raised);
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s5);
+  margin-top: var(--s4);
+}
+
+.gallery-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.gallery-card-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rule);
+  background: var(--paper-sunken);
+  overflow: hidden;
+  height: 180px;
+}
+
+.gallery-card-caption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-faint);
+  color: var(--taupe);
+}
+
+.gallery-card-caption .strategy {
+  color: var(--accent-ink);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* ============ footer ============ */
