@@ -6,3 +6,8 @@ dist-ssr
 *.tsbuildinfo
 playwright-report
 test-results
+
+# internal assignment/process docs — kept locally for reference, not published
+orginal-doc.md
+FINAL_IMPLEMENTATION_GUIDE.md
+guide.md
