@@ -1,244 +1,393 @@
-// Generic candidate layout strategies. Every strategy is evaluated in both a
-// natural and a frame-filling presentation. Neither path knows a surface id:
-// geometry, authored order, roles, and measurements are the only inputs.
+// Generic candidate layout strategies. Every strategy is a pure function of
+// the available rectangle, the current element pool, and the surface's own
+// constraints — never a surface id. All four (stack/split/band/poster) run
+// for every surface; validation + scoring decide which one wins, not a
+// branch here. Each strategy produces exactly one raw, structurally-correct
+// candidate — repair.ts is responsible for growing it toward its target
+// proportions, not this file.
+//
+// One deliberate rule applied uniformly: padding insets where TEXT/button/
+// brand elements sit (so nothing reads flush against the safe-area edge),
+// but the hero image is allowed to use the full available rect on its own
+// axis — it has no legibility margin to protect and is meant to dominate the
+// composition, so it bleeds closer to the edge than the padded text does.
 
-import type { LayoutCandidate, MeasuredElement, PresentationVariant, ResolvedBox, Rect } from "./types";
-import { inContentOrder } from "./measure";
+import type { AdElement, MeasuredElement, NormalizedSurfaceProfile, ResolvedBox, Rect } from "./types";
+import {
+  brandFontFor,
+  buttonFontSize,
+  ctaHeightFor,
+  headlineFontFor,
+  heroMinWidthFor,
+  measureActiveContentWidth,
+  paddingFor,
+  posterHeadlineFontFor,
+  priceFontFor,
+} from "./measure";
 
-const MAX_FILL_HERO_WIDTH = 960;
-const MAX_FILL_CONTENT_WIDTH = 960;
-const MAX_FILL_ACTION_WIDTH = 720;
+const LINE_HEIGHT_FACTOR = 1.35; // matches measure.ts
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
-function fillWidth(item: MeasuredElement, natural: number, rect: Rect): number {
-  if (item.shrunk) return natural;
-  const role = item.element.role;
-  if (role === "hero") return Math.min(rect.width, MAX_FILL_HERO_WIDTH);
-  if (role === "primary") return Math.min(rect.width, MAX_FILL_CONTENT_WIDTH);
-  if (role === "action") return Math.min(rect.width, MAX_FILL_ACTION_WIDTH);
-  if (role === "secondary") return Math.max(natural, Math.min(rect.width * 0.18, 240));
-  if (role === "branding") return Math.max(natural, Math.min(rect.width * 0.14, 160));
-  return natural;
+function byRole(items: MeasuredElement[], role: string): MeasuredElement | undefined {
+  return items.find((item) => item.element.role === role);
 }
 
-function layoutColumn(
-  items: MeasuredElement[],
-  columnRect: Rect,
-  align: "start" | "center",
-  baseGap: number,
-  presentation: PresentationVariant,
-  distributeFlow = false,
-): ResolvedBox[] {
-  const sized = items.map((item) => {
-    const { measurement } = item;
-    const naturalWidth = clamp(measurement.prefWidth, measurement.minWidth, columnRect.width);
-    let width = presentation === "frame-fill" ? fillWidth(item, naturalWidth, columnRect) : naturalWidth;
-    width = clamp(width, measurement.minWidth, columnRect.width);
-    let height: number;
+function insetRect(rect: Rect, padding: number): Rect {
+  return { x: rect.x + padding, y: rect.y + padding, width: rect.width - padding * 2, height: rect.height - padding * 2 };
+}
 
-    if (item.element.type === "image") {
-      const aspect = measurement.prefWidth / measurement.prefHeight;
-      width = Math.min(width, columnRect.height * aspect);
-      height = width / aspect;
-      if (height < measurement.minHeight) {
-        height = measurement.minHeight;
-        width = Math.min(height * aspect, columnRect.width);
-      }
-    } else if (presentation === "frame-fill" && item.element.role === "action" && !item.shrunk) {
-      height = Math.max(measurement.prefHeight, Math.min(columnRect.height * 0.12, 72));
-    } else if (presentation === "frame-fill" && item.element.role === "primary" && !item.shrunk) {
-      height = Math.max(measurement.prefHeight, Math.min(columnRect.height * 0.07, 86.4));
-    } else if (presentation === "frame-fill" && item.element.role === "secondary" && !item.shrunk) {
-      height = Math.max(measurement.prefHeight, Math.min(columnRect.height * 0.035, 48));
-    } else {
-      height = measurement.prefHeight;
-    }
-    return { item, width, height };
-  });
+interface Size {
+  width: number;
+  height: number;
+  fontSize?: number;
+}
 
-  const itemHeight = sized.reduce((sum, box) => sum + box.height, 0);
-  let gap = baseGap;
-  if (presentation === "frame-fill" && distributeFlow && sized.length > 1) {
-    const targetCoverage = sized.length >= 5 ? 0.9 : sized.length === 4 ? 0.8 : sized.length === 3 ? 0.66 : 0.46;
-    const desiredGap = (columnRect.height * targetCoverage - itemHeight) / (sized.length - 1);
-    // Sparse survivors on a very tall surface need more separation to use the
-    // flow axis; denser compositions keep a tighter editorial rhythm.
-    const maxGapRatio = sized.length <= 2 ? 0.3 : sized.length === 3 ? 0.22 : 0.12;
-    const maxGap = Math.max(baseGap, columnRect.height * maxGapRatio);
-    gap = clamp(desiredGap, baseGap, maxGap);
+/** Sizes a text box at `fontSize`, but if the content genuinely can't fit
+ * `maxWidth` at that size, shrinks the font (down to `surface.minTextSize`)
+ * until it does — the box is always sized to fit its own content, never
+ * independently clamped narrower than what its font size needs (that would
+ * produce a box the active text can't actually fit in). */
+function sizeText(item: MeasuredElement, fontSize: number, surface: NormalizedSurfaceProfile, maxWidth?: number): Size {
+  const el = item.element as Extract<AdElement, { type: "text" }>;
+  let f = fontSize;
+  let width = measureActiveContentWidth(el, item.contentVariant, f);
+  if (maxWidth !== undefined && width > maxWidth && width > 0) {
+    const scale = maxWidth / width;
+    f = Math.max(surface.minTextSize, f * scale);
+    width = measureActiveContentWidth(el, item.contentVariant, f);
   }
-
-  const totalHeight = itemHeight + gap * Math.max(0, sized.length - 1);
-  let y = align === "center" ? columnRect.y + Math.max(0, (columnRect.height - totalHeight) / 2) : columnRect.y;
-
-  return sized.map(({ item, width, height }) => {
-    const x = columnRect.x + Math.max(0, (columnRect.width - width) / 2);
-    const box: ResolvedBox = { id: item.element.id, x, y, width, height };
-    y += height + gap;
-    return box;
-  });
+  width = Math.max(item.measurement.minWidth, width);
+  return { width, height: f * LINE_HEIGHT_FACTOR, fontSize: f };
 }
 
-/** Authored reading order in a single column. */
-function verticalStack(items: MeasuredElement[], rect: Rect, gap: number, presentation: PresentationVariant): LayoutCandidate | null {
-  const ordered = inContentOrder(items);
-  if (ordered.length === 0) return null;
+function sizeCta(item: MeasuredElement, surface: NormalizedSurfaceProfile): Size {
+  const el = item.element as Extract<AdElement, { type: "button" }>;
+  const fontSize = buttonFontSize(surface);
+  const labelWidth = measureActiveContentWidth(el, item.contentVariant, fontSize);
+  const width = Math.max(item.measurement.minWidth, labelWidth + 36); // 18px horizontal padding per side, matches measure.ts's measureButton
+  return { width, height: ctaHeightFor(surface), fontSize };
+}
+
+function sizeBrand(item: MeasuredElement, surface: NormalizedSurfaceProfile, rect: Rect): Size {
+  const fontSize = brandFontFor(surface, rect);
+  const width = item.measurement.prefWidth;
+  const height = Math.max(item.measurement.minHeight, fontSize * 1.6);
+  return { width, height, fontSize };
+}
+
+/** Fits the hero's fixed aspect ratio inside a box up to `maxWidth`/`maxHeight` —
+ * never stretches or squashes it; geometry may shrink, the shape never distorts. */
+function sizeHero(item: MeasuredElement, maxWidth: number, maxHeight: number): Size {
+  const aspect = item.measurement.prefWidth / item.measurement.prefHeight;
+  let width = Math.min(maxWidth, Math.max(0, maxHeight) * aspect);
+  let height = width / aspect;
+  if (width > maxWidth) {
+    width = maxWidth;
+    height = width / aspect;
+  }
+  return { width, height };
+}
+
+function makeBox(item: MeasuredElement, x: number, y: number, size: Size): ResolvedBox {
   return {
-    strategy: "vertical-stack",
-    presentation,
-    boxes: layoutColumn(ordered, rect, "center", gap, presentation, true),
+    id: item.element.id,
+    x,
+    y,
+    width: size.width,
+    height: size.height,
+    presentation: { variant: item.contentVariant, visible: true, cropped: item.cropped, fontSize: size.fontSize },
   };
 }
 
-function groupByRole(items: MeasuredElement[]) {
-  const map = new Map<string, MeasuredElement[]>();
-  for (const item of items) {
-    const list = map.get(item.element.role) ?? [];
-    list.push(item);
-    map.set(item.element.role, list);
+// ---------------------------------------------------------------------------
+// Stack — top: headline + reserved brand slot. bottom: price + CTA. hero: all
+// legal middle remainder, spanning the full rect width (not padding-inset).
+// ---------------------------------------------------------------------------
+
+function stack(items: MeasuredElement[], rect: Rect, gap: number, surface: NormalizedSurfaceProfile): ReturnType<LayoutStrategy> {
+  const padding = paddingFor(rect);
+  const inner = insetRect(rect, padding);
+  if (inner.width <= 0 || inner.height <= 0) return null;
+
+  const headline = byRole(items, "primary");
+  const hero = byRole(items, "hero");
+  const price = byRole(items, "secondary");
+  const cta = byRole(items, "action");
+  const brand = byRole(items, "branding");
+  if (!headline && !hero && !price && !cta && !brand) return null;
+
+  const boxes: ResolvedBox[] = [];
+
+  let brandSize: Size | undefined;
+  if (brand) brandSize = sizeBrand(brand, surface, rect);
+  const headlineBudget = brandSize ? Math.max(0, inner.width - brandSize.width - gap) : inner.width;
+
+  let topRowHeight = 0;
+  if (headline) {
+    const size = sizeText(headline, headlineFontFor(surface, rect), surface, headlineBudget);
+    boxes.push(makeBox(headline, inner.x, inner.y, size));
+    topRowHeight = Math.max(topRowHeight, size.height);
   }
-  return map;
+  if (brand && brandSize) {
+    boxes.push(makeBox(brand, inner.x + inner.width - brandSize.width, inner.y, brandSize));
+    topRowHeight = Math.max(topRowHeight, brandSize.height);
+  }
+
+  let bottomRowHeight = 0;
+  let priceSize: Size | undefined;
+  let ctaSize: Size | undefined;
+  if (price) priceSize = sizeText(price, priceFontFor("stack", surface, rect), surface, inner.width);
+  if (cta) ctaSize = sizeCta(cta, surface);
+  if (priceSize) bottomRowHeight = Math.max(bottomRowHeight, priceSize.height);
+  if (ctaSize) bottomRowHeight = Math.max(bottomRowHeight, ctaSize.height);
+  const bottomY = inner.y + inner.height - bottomRowHeight;
+  if (price && priceSize) {
+    boxes.push(makeBox(price, inner.x, bottomY + (bottomRowHeight - priceSize.height) / 2, priceSize));
+  }
+  if (cta && ctaSize) {
+    boxes.push(makeBox(cta, inner.x + inner.width - ctaSize.width, bottomY + (bottomRowHeight - ctaSize.height) / 2, ctaSize));
+  }
+
+  if (hero) {
+    const heroTop = inner.y + topRowHeight + (topRowHeight > 0 ? gap : 0);
+    const heroBottom = bottomY - (bottomRowHeight > 0 ? gap : 0);
+    const availHeight = heroBottom - heroTop;
+    if (availHeight <= 0) return null; // hero has nowhere to go — reject the whole candidate, never drop it silently
+    // bounded by inner.width (padding-inset), not the full rect — Stack is a
+    // headline-led composition, not a poster; a hero that bleeds to the edges
+    // here would make Stack indistinguishable from Poster on square surfaces.
+    const size = sizeHero(hero, inner.width, availHeight);
+    const x = inner.x + (inner.width - size.width) / 2;
+    const y = heroTop + (availHeight - size.height) / 2;
+    boxes.push(makeBox(hero, x, y, size));
+  }
+
+  return boxes.length > 0 ? { strategy: "stack", boxes } : null;
 }
 
-function naturalGroupWidth(group: MeasuredElement[]): number {
-  return Math.max(...group.map((item) => item.measurement.prefWidth));
+// ---------------------------------------------------------------------------
+// Split — left: headline top, commerce (price+CTA) centered in the remaining
+// left height. right: reserved brand slot, hero fills the remaining right
+// panel (bleeding to the rect's right/bottom edges, not padding-inset).
+// ---------------------------------------------------------------------------
+
+const SPLIT_HERO_SHARE = 0.56;
+const SPLIT_HERO_MAX_SHARE = 0.7;
+const SPLIT_CTA_TARGET_FILL = 0.86;
+
+function split(items: MeasuredElement[], rect: Rect, gap: number, surface: NormalizedSurfaceProfile): ReturnType<LayoutStrategy> {
+  const padding = paddingFor(rect);
+  const inner = insetRect(rect, padding);
+  if (inner.width <= 0 || inner.height <= 0) return null;
+
+  const headline = byRole(items, "primary");
+  const hero = byRole(items, "hero");
+  const price = byRole(items, "secondary");
+  const cta = byRole(items, "action");
+  const brand = byRole(items, "branding");
+  if (!headline && !hero && !price && !cta && !brand) return null;
+
+  const heroMinW = hero ? Math.max(hero.measurement.minWidth, heroMinWidthFor(rect)) : 0;
+  let heroWidth = hero ? clamp(rect.width * SPLIT_HERO_SHARE, heroMinW, rect.width * SPLIT_HERO_MAX_SHARE) : 0;
+  const heroX = rect.x + rect.width - heroWidth;
+  const leftWidth = hero ? heroX - gap - inner.x : inner.width;
+  if (leftWidth <= 0) return null;
+
+  const boxes: ResolvedBox[] = [];
+  let headlineBottom = inner.y;
+  if (headline) {
+    const size = sizeText(headline, headlineFontFor(surface, rect), surface, leftWidth);
+    boxes.push(makeBox(headline, inner.x, inner.y, size));
+    headlineBottom = inner.y + size.height + gap;
+  }
+
+  const remainingTop = headlineBottom;
+  const remainingHeight = inner.y + inner.height - remainingTop;
+  let priceSize: Size | undefined;
+  let ctaSize: Size | undefined;
+  if (price) priceSize = sizeText(price, priceFontFor("split", surface, rect), surface, leftWidth);
+  if (cta) {
+    ctaSize = sizeCta(cta, surface);
+    // widen toward the 86% target, but never narrower than the label actually needs
+    ctaSize.width = Math.max(ctaSize.width, Math.min(leftWidth * SPLIT_CTA_TARGET_FILL, leftWidth));
+  }
+  const commerceHeight = (priceSize?.height ?? 0) + (priceSize && ctaSize ? gap : 0) + (ctaSize?.height ?? 0);
+  let commerceY = remainingTop + Math.max(0, (remainingHeight - commerceHeight) / 2);
+  if (price && priceSize) {
+    const width = Math.min(Math.max(priceSize.width, leftWidth * 0.6), leftWidth);
+    boxes.push(makeBox(price, inner.x, commerceY, { ...priceSize, width }));
+    commerceY += priceSize.height + gap;
+  }
+  if (cta && ctaSize) {
+    boxes.push(makeBox(cta, inner.x, commerceY, ctaSize));
+  }
+
+  let brandBottom = inner.y;
+  if (brand) {
+    const size = sizeBrand(brand, surface, rect);
+    boxes.push(makeBox(brand, inner.x + inner.width - size.width, inner.y, size));
+    brandBottom = inner.y + size.height + gap;
+  }
+
+  if (hero) {
+    const heroTop = brandBottom;
+    const heroAvailHeight = rect.y + rect.height - heroTop;
+    if (heroAvailHeight <= 0) return null; // hero has nowhere to go — reject the whole candidate, never drop it silently
+    const size = sizeHero(hero, heroWidth, heroAvailHeight);
+    const x = heroX + (heroWidth - size.width) / 2;
+    const y = heroTop + (heroAvailHeight - size.height) / 2;
+    boxes.push(makeBox(hero, x, y, size));
+  }
+
+  return boxes.length > 0 ? { strategy: "split", boxes } : null;
 }
 
-function fillBandGroupWidth(group: MeasuredElement[], rect: Rect): number {
-  const natural = naturalGroupWidth(group);
-  if (group.some((item) => item.element.role === "hero")) {
-    const hero = group.find((item) => item.element.role === "hero")!;
-    const aspect = hero.measurement.prefWidth / hero.measurement.prefHeight;
-    return Math.max(natural, Math.min(rect.height * aspect * 0.9, MAX_FILL_HERO_WIDTH));
-  }
-  if (group.some((item) => item.element.role === "action")) {
-    return Math.max(natural, Math.min(rect.width * 0.12, 320));
-  }
-  if (group.some((item) => item.element.role === "branding")) {
-    return Math.max(natural, Math.min(rect.height * 0.4, 160));
-  }
-  return natural;
-}
+// ---------------------------------------------------------------------------
+// Band — fixed order headline | hero | price | CTA | brand. Fixed internal
+// gaps; hero absorbs whatever horizontal slack remains after every fixed-
+// width member is sized, bounded by its own min/max share. Any slack left
+// after the hero's own cap becomes a balanced outer margin, not stretched
+// gaps.
+// ---------------------------------------------------------------------------
 
-/** Branding | hero | text cluster | action, distributed across wide surfaces. */
-function horizontalBand(items: MeasuredElement[], rect: Rect, gap: number, presentation: PresentationVariant): LayoutCandidate | null {
-  const byRole = groupByRole(items);
-  const groups = [
-    byRole.get("branding") ?? [],
-    byRole.get("hero") ?? [],
-    [...(byRole.get("primary") ?? []), ...(byRole.get("secondary") ?? [])],
-    byRole.get("action") ?? [],
-  ].filter((group) => group.length > 0);
-  if (groups.length === 0) return null;
+const BAND_HERO_MAX_SHARE = 0.45;
 
-  const prefWidths = groups.map((group) =>
-    presentation === "frame-fill" ? fillBandGroupWidth(group, rect) : naturalGroupWidth(group),
-  );
-  const minWidths = groups.map((group) => Math.max(...group.map((item) => item.measurement.minWidth)));
-  const totalPref = prefWidths.reduce((sum, width) => sum + width, 0);
-  let actualGap = gap;
-  let x = rect.x;
+function band(items: MeasuredElement[], rect: Rect, gap: number, surface: NormalizedSurfaceProfile): ReturnType<LayoutStrategy> {
+  const padding = paddingFor(rect);
+  const inner = insetRect(rect, padding);
+  if (inner.width <= 0 || inner.height <= 0) return null;
 
-  if (presentation === "frame-fill" && groups.length > 1 && totalPref + gap * (groups.length - 1) <= rect.width * 0.9) {
-    const targetSpan = rect.width * 0.9;
-    actualGap = (targetSpan - totalPref) / (groups.length - 1);
-    x = rect.x + rect.width * 0.05;
-  } else {
-    const availableForCols = rect.width - gap * (groups.length - 1);
-    const scale = totalPref > 0 ? availableForCols / totalPref : 1;
-    const contentWidth = totalPref + gap * (groups.length - 1);
-    x = scale >= 1 ? rect.x + Math.max(0, (rect.width - contentWidth) / 2) : rect.x;
-    if (scale < 1) {
-      for (let i = 0; i < prefWidths.length; i++) prefWidths[i] = Math.max(minWidths[i]!, prefWidths[i]! * scale);
+  const headline = byRole(items, "primary");
+  const hero = byRole(items, "hero");
+  const price = byRole(items, "secondary");
+  const cta = byRole(items, "action");
+  const brand = byRole(items, "branding");
+  const order = [headline, hero, price, cta, brand].filter((m): m is MeasuredElement => !!m);
+  if (order.length === 0) return null;
+
+  const sizes = new Map<string, Size>();
+  let fixedWidthTotal = 0;
+  for (const m of order) {
+    if (m === hero) continue;
+    let size: Size;
+    if (m === headline) size = sizeText(m, headlineFontFor(surface, rect), surface, inner.width);
+    else if (m === price) size = sizeText(m, priceFontFor("band", surface, rect), surface, inner.width);
+    else if (m === cta) size = sizeCta(m, surface);
+    else size = sizeBrand(m, surface, rect);
+    sizes.set(m.element.id, size);
+    fixedWidthTotal += size.width;
+  }
+
+  const gapTotal = gap * Math.max(0, order.length - 1);
+  let heroSize: Size | undefined;
+  if (hero) {
+    const remaining = inner.width - fixedWidthTotal - gapTotal;
+    const heroMinW = Math.max(hero.measurement.minWidth, heroMinWidthFor(rect));
+    const heroMaxW = inner.width * BAND_HERO_MAX_SHARE;
+    const heroWidth = clamp(remaining, heroMinW, Math.max(heroMinW, heroMaxW));
+    // hero may use the full rect height (not padding-inset) — it's the one
+    // member here with no legibility margin to protect.
+    heroSize = sizeHero(hero, heroWidth, rect.height);
+  }
+
+  const contentWidth = fixedWidthTotal + (heroSize?.width ?? 0) + gapTotal;
+  const outerMargin = Math.max(0, (inner.width - contentWidth) / 2);
+
+  const boxes: ResolvedBox[] = [];
+  let x = inner.x + outerMargin;
+  for (const m of order) {
+    if (m === hero && heroSize) {
+      const y = rect.y + (rect.height - heroSize.height) / 2;
+      boxes.push(makeBox(hero, x, y, heroSize));
+      x += heroSize.width + gap;
+      continue;
     }
+    const size = sizes.get(m.element.id);
+    if (!size) continue;
+    const height = Math.min(size.height, inner.height);
+    const y = inner.y + (inner.height - height) / 2;
+    boxes.push(makeBox(m, x, y, { ...size, height }));
+    x += size.width + gap;
   }
 
-  const boxes: ResolvedBox[] = [];
-  for (let i = 0; i < groups.length; i++) {
-    const width = prefWidths[i]!;
-    if (width <= 0) return null;
-    const columnRect: Rect = { x, y: rect.y, width, height: rect.height };
-    boxes.push(...layoutColumn(groups[i]!, columnRect, "center", gap, presentation, true));
-    x += width + actualGap;
-  }
-  return { strategy: "horizontal-band", presentation, boxes };
+  return boxes.length > 0 ? { strategy: "band", boxes } : null;
 }
 
-/** Hero on one side, authored non-hero content on the other. */
-function sideBySideSplit(items: MeasuredElement[], rect: Rect, gap: number, presentation: PresentationVariant): LayoutCandidate | null {
-  const heroItems = items.filter((item) => item.element.role === "hero");
-  const restItems = inContentOrder(items.filter((item) => item.element.role !== "hero"));
-  if (heroItems.length === 0 && restItems.length === 0) return null;
+// ---------------------------------------------------------------------------
+// Poster — top: headline + brand. center: large hero, target 82% of the rect
+// width (not padding-inset — the hero is meant to dominate). bottom: price +
+// CTA.
+// ---------------------------------------------------------------------------
 
-  const heroPrefWidth = heroItems.length ? Math.max(...heroItems.map((item) => item.measurement.prefWidth)) : 0;
-  const restPrefWidth = restItems.length ? Math.max(...restItems.map((item) => item.measurement.prefWidth)) : 0;
-  const heroMinWidth = heroItems.length ? Math.max(...heroItems.map((item) => item.measurement.minWidth)) : 0;
-  const totalPref = heroPrefWidth + restPrefWidth;
-  let heroWidth = totalPref > 0 ? rect.width * (heroPrefWidth / totalPref) : rect.width / 2;
-  if (presentation === "frame-fill" && heroItems.length && restItems.length) {
-    // Start with a hero-forward split, then yield only the width needed for the
-    // authored text/button column to render its current variants honestly. This
-    // avoids a surface-specific ratio and, critically, prevents CSS from silently
-    // ellipsizing content that the resolver still reports as "full".
-    const restRequiredWidth = Math.max(...restItems.map((item) => item.measurement.prefWidth));
-    heroWidth = Math.min(rect.width * 0.35, rect.width - gap - restRequiredWidth);
-  }
-  heroWidth = clamp(heroWidth, heroMinWidth, Math.min(rect.width, MAX_FILL_HERO_WIDTH));
+const POSTER_HERO_TARGET_SHARE = 0.82;
 
-  const restWidth = rect.width - heroWidth - (restItems.length ? gap : 0);
-  if (restItems.length > 0 && restWidth <= 0) return null;
+function poster(items: MeasuredElement[], rect: Rect, gap: number, surface: NormalizedSurfaceProfile): ReturnType<LayoutStrategy> {
+  const padding = paddingFor(rect);
+  const inner = insetRect(rect, padding);
+  if (inner.width <= 0 || inner.height <= 0) return null;
+
+  const headline = byRole(items, "primary");
+  const hero = byRole(items, "hero");
+  const price = byRole(items, "secondary");
+  const cta = byRole(items, "action");
+  const brand = byRole(items, "branding");
+  if (!headline && !hero && !price && !cta && !brand) return null;
 
   const boxes: ResolvedBox[] = [];
-  if (heroItems.length) {
-    boxes.push(...layoutColumn(heroItems, { x: rect.x, y: rect.y, width: heroWidth, height: rect.height }, "center", gap, presentation));
-  }
-  if (restItems.length) {
-    boxes.push(
-      ...layoutColumn(
-        restItems,
-        { x: rect.x + heroWidth + gap, y: rect.y, width: restWidth, height: rect.height },
-        "center",
-        gap,
-        presentation,
-        true,
-      ),
-    );
-  }
-  return boxes.length > 0 ? { strategy: "side-by-side-split", presentation, boxes } : null;
-}
 
-/** Two-column grid in authored order. */
-function adaptiveGrid(items: MeasuredElement[], rect: Rect, gap: number, presentation: PresentationVariant): LayoutCandidate | null {
-  const ordered = inContentOrder(items);
-  if (ordered.length === 0) return null;
-  const cols = 2;
-  const rows = Math.ceil(ordered.length / cols);
-  const colWidth = (rect.width - gap * (cols - 1)) / cols;
-  const rowHeight = (rect.height - gap * (rows - 1)) / rows;
-  if (colWidth <= 0 || rowHeight <= 0) return null;
+  let brandSize: Size | undefined;
+  if (brand) brandSize = sizeBrand(brand, surface, rect);
+  const headlineBudget = brandSize ? Math.max(0, inner.width - brandSize.width - gap) : inner.width;
 
-  const boxes = ordered.map((item, index) => {
-    const row = Math.floor(index / cols);
-    const col = index % cols;
-    const cellRect: Rect = {
-      x: rect.x + col * (colWidth + gap),
-      y: rect.y + row * (rowHeight + gap),
-      width: colWidth,
-      height: rowHeight,
-    };
-    return layoutColumn([item], cellRect, "center", gap, presentation)[0]!;
-  });
-  return { strategy: "adaptive-grid", presentation, boxes };
+  let topRowHeight = 0;
+  if (headline) {
+    const size = sizeText(headline, posterHeadlineFontFor(surface, rect), surface, headlineBudget);
+    boxes.push(makeBox(headline, inner.x, inner.y, size));
+    topRowHeight = Math.max(topRowHeight, size.height);
+  }
+  if (brand && brandSize) {
+    boxes.push(makeBox(brand, inner.x + inner.width - brandSize.width, inner.y, brandSize));
+    topRowHeight = Math.max(topRowHeight, brandSize.height);
+  }
+
+  let bottomRowHeight = 0;
+  let priceSize: Size | undefined;
+  let ctaSize: Size | undefined;
+  if (price) priceSize = sizeText(price, priceFontFor("poster", surface, rect), surface, inner.width);
+  if (cta) ctaSize = sizeCta(cta, surface);
+  if (priceSize) bottomRowHeight = Math.max(bottomRowHeight, priceSize.height);
+  if (ctaSize) bottomRowHeight = Math.max(bottomRowHeight, ctaSize.height);
+  const bottomY = inner.y + inner.height - bottomRowHeight;
+  if (price && priceSize) {
+    boxes.push(makeBox(price, inner.x, bottomY + (bottomRowHeight - priceSize.height) / 2, priceSize));
+  }
+  if (cta && ctaSize) {
+    boxes.push(makeBox(cta, inner.x + inner.width - ctaSize.width, bottomY + (bottomRowHeight - ctaSize.height) / 2, ctaSize));
+  }
+
+  if (hero) {
+    const heroTop = inner.y + topRowHeight + (topRowHeight > 0 ? gap : 0);
+    const heroBottom = bottomY - (bottomRowHeight > 0 ? gap : 0);
+    const availHeight = heroBottom - heroTop;
+    if (availHeight <= 0) return null; // hero has nowhere to go — reject the whole candidate, never drop it silently
+    const targetWidth = rect.width * POSTER_HERO_TARGET_SHARE;
+    const size = sizeHero(hero, Math.min(targetWidth, rect.width), availHeight);
+    const x = rect.x + (rect.width - size.width) / 2;
+    const y = heroTop + (availHeight - size.height) / 2;
+    boxes.push(makeBox(hero, x, y, size));
+  }
+
+  return boxes.length > 0 ? { strategy: "poster", boxes } : null;
 }
 
 export type LayoutStrategy = (
   items: MeasuredElement[],
   rect: Rect,
   gap: number,
-  presentation: PresentationVariant,
-) => LayoutCandidate | null;
+  surface: NormalizedSurfaceProfile,
+) => { strategy: string; boxes: ResolvedBox[] } | null;
 
-export const STRATEGIES: LayoutStrategy[] = [verticalStack, horizontalBand, sideBySideSplit, adaptiveGrid];
+export const STRATEGIES: LayoutStrategy[] = [stack, split, band, poster];
