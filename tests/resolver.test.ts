@@ -37,7 +37,7 @@ describe("resolveLayout — unknown fifth surface", () => {
 
 describe("resolveLayout — constrained surface", () => {
   it("degrades lower-priority content before dropping to a valid layout", () => {
-    const tight: SurfaceProfile = { id: "tightBanner", width: 300, height: 130, minTapTarget: 40 };
+    const tight: SurfaceProfile = { id: "tightBanner", width: 220, height: 90, minTapTarget: 40 };
     const result = resolveLayout(demoAd, tight);
     expect(result.ok).toBe(true);
     if (!result.ok) return;

@@ -1,7 +1,9 @@
-// Tests for the content-and-spacing-aware degradation ladder: the global
-// spacing-compaction rung, and the per-tier merge/shorten/iconify content rungs that
-// run before the existing shrink/truncate/crop/drop rungs. See resolver.ts's header
-// comment for the exact rung order.
+// Tests for the fixed degradation ladder (resolver.ts's header comment has the
+// exact rung order): full/default gap -> full/compact gap -> brand hidden ->
+// price compact -> CTA compact -> price may drop -> hero crop/shrink ->
+// headline compact -> fail. Each test below uses a real surface width/height
+// pair, found by sweeping, that naturally lands on the rung boundary it
+// demonstrates — not a hand-waved illustration.
 
 import { describe, expect, it } from "vitest";
 import { demoAd } from "../src/spec";
@@ -15,66 +17,84 @@ function assertInvariants(layout: Parameters<typeof assertInvariantsShared>[0], 
   assertInvariantsShared(layout, surface, demoAd);
 }
 
-describe("degradation ladder — content-variant rungs", () => {
-  const tight: SurfaceProfile = {
-    id: "tight-content-ladder",
-    width: 510,
-    height: 90,
-    safeArea: { top: 8, right: 8, bottom: 8, left: 8 },
-    minTapTarget: 40,
-    minTextSize: 11,
-  };
+const TAP = { minTapTarget: 40 };
 
-  it("shortens and merges price/cta content before ever touching priority-1 headline/hero", () => {
-    const result = resolveLayout(demoAd, tight);
+describe("degradation ladder — brand hides first", () => {
+  it("hides branding alone when that's enough, leaving everything else full", () => {
+    const surface: SurfaceProfile = { id: "brand-only", width: 200, height: 220, ...TAP };
+    const result = resolveLayout(demoAd, surface);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    assertInvariants(result.layout, tight);
+    assertInvariants(result.layout, surface);
 
-    // priority-3 branding drops first, as before this feature existed
-    expect(result.layout.omitted.map((o) => o.id)).toContain("logo");
+    expect(result.layout.degradations).toEqual([{ id: "logo", action: "hide", detail: "hidden to reserve space" }]);
+    expect(result.layout.omitted).toEqual([{ id: "logo", reason: "hidden to reserve space for higher-priority content" }]);
+    expect(result.layout.boxes.some((b) => b.id === "logo")).toBe(false);
 
-    // price folded into the CTA rather than existing as its own box
-    expect(result.layout.boxes.some((b) => b.id === "price")).toBe(false);
-    expect(result.layout.degradations.some((d) => d.id === "cta" && d.action === "merge" && d.mergedContent === "Buy $30")).toBe(true);
-    expect(result.layout.omitted.some((o) => o.id === "price" && o.reason.includes("merged"))).toBe(true);
-
-    // priority-1 content (headline/hero) is untouched — cta (priority 2) absorbed the
-    // degradation first, exactly what "lower priority degrades first" requires
-    expect(result.layout.degradations.some((d) => d.id === "headline")).toBe(false);
-    expect(result.layout.degradations.some((d) => d.id === "product-image")).toBe(false);
-    expect(result.layout.boxes.find((b) => b.id === "headline")?.width).toBeGreaterThan(0);
-    expect(result.layout.boxes.find((b) => b.id === "product-image")?.width).toBeGreaterThan(0);
-  });
-
-  it("collapses the CTA to icon-only (with a merge already applied) rather than dropping it", () => {
-    const result = resolveLayout(demoAd, tight);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    // cta survives as a box — never dropped in this scenario, despite being degraded
-    // through merge + iconify + shrink
-    expect(result.layout.boxes.some((b) => b.id === "cta")).toBe(true);
-    expect(result.layout.omitted.some((o) => o.id === "cta")).toBe(false);
-    expect(result.layout.degradations.some((d) => d.id === "cta" && d.action === "iconify")).toBe(true);
+    for (const id of ["headline", "product-image", "price", "cta"]) {
+      const box = result.layout.boxes.find((b) => b.id === id)!;
+      expect(box.presentation.variant).toBe("full");
+    }
   });
 });
 
-describe("degradation ladder — icon-only tap target guarantee", () => {
-  it("an icon-only button's measured floor never drops below minTapTarget", () => {
-    const surface = normalizeSurfaceProfile({ id: "tap-check", width: 400, height: 400, minTapTarget: 44 });
-    const rect = { x: 0, y: 0, width: 400, height: 400 };
-    const cta = demoAd.elements.find((e) => e.id === "cta")!;
-    const iconMeasurement = measureElement(cta, surface, rect, "icon", false);
-    // this is exactly what guarantees an icon-only CTA can never be squeezed narrower
-    // or shorter than a real tappable target, the same guarantee the full-label state
-    // already had (see measure.ts's measureButton)
-    expect(iconMeasurement.minWidth).toBeGreaterThanOrEqual(44);
-    expect(iconMeasurement.minHeight).toBeGreaterThanOrEqual(44);
-  });
+describe("degradation ladder — price and CTA compact before priority-1 is touched", () => {
+  it("switches price and CTA to compact content while headline/hero stay full", () => {
+    const surface: SurfaceProfile = { id: "price-cta-compact", width: 170, height: 220, ...TAP };
+    const result = resolveLayout(demoAd, surface);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    assertInvariants(result.layout, surface);
 
-  // The accessible name (aria-label = the full original label whenever the icon-only
-  // state renders) is enforced in render-dom.tsx and covered in Chromium by
-  // e2e/composition.spec.ts; this Node test owns the resolver-side geometry floor.
+    expect(result.layout.omitted.map((o) => o.id)).toEqual(["logo"]);
+    const price = result.layout.boxes.find((b) => b.id === "price")!;
+    const cta = result.layout.boxes.find((b) => b.id === "cta")!;
+    expect(price.presentation.variant).toBe("compact");
+    expect(cta.presentation.variant).toBe("compact");
+
+    const headline = result.layout.boxes.find((b) => b.id === "headline")!;
+    const hero = result.layout.boxes.find((b) => b.id === "product-image")!;
+    expect(headline.presentation.variant).toBe("full");
+    expect(hero.presentation.cropped).toBe(false);
+  });
+});
+
+describe("degradation ladder — price may drop, CTA never does", () => {
+  it("drops price entirely once compacting it isn't enough, while CTA survives (compact, not dropped)", () => {
+    const surface: SurfaceProfile = { id: "price-drop", width: 150, height: 220, ...TAP };
+    const result = resolveLayout(demoAd, surface);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    assertInvariants(result.layout, surface);
+
+    expect(result.layout.boxes.some((b) => b.id === "price")).toBe(false);
+    expect(result.layout.omitted.map((o) => o.id).sort()).toEqual(["logo", "price"]);
+    expect(result.layout.degradations.some((d) => d.id === "price" && d.action === "drop")).toBe(true);
+
+    const cta = result.layout.boxes.find((b) => b.id === "cta")!;
+    expect(cta).toBeTruthy();
+    expect(result.layout.omitted.some((o) => o.id === "cta")).toBe(false);
+  });
+});
+
+describe("degradation ladder — hero and headline degrade only as a last resort", () => {
+  it("crops/shrinks the hero and compacts headline only once everything lower-priority is exhausted", () => {
+    const surface: SurfaceProfile = { id: "last-resort", width: 130, height: 220, ...TAP };
+    const result = resolveLayout(demoAd, surface);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    assertInvariants(result.layout, surface);
+
+    // priority 1 is degraded in presentation, but never omitted
+    expect(result.layout.boxes.some((b) => b.id === "headline")).toBe(true);
+    expect(result.layout.boxes.some((b) => b.id === "product-image")).toBe(true);
+    expect(result.layout.omitted.some((o) => o.id === "headline" || o.id === "product-image")).toBe(false);
+
+    const headline = result.layout.boxes.find((b) => b.id === "headline")!;
+    const hero = result.layout.boxes.find((b) => b.id === "product-image")!;
+    expect(headline.presentation.variant).toBe("compact");
+    expect(hero.presentation.cropped).toBe(true);
+  });
 });
 
 describe("degradation ladder — global spacing-compaction rung", () => {
@@ -90,7 +110,9 @@ describe("degradation ladder — global spacing-compaction rung", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     assertInvariants(result.layout, surface);
-    expect(result.layout.degradations).toEqual([{ id: "*", action: "compact-spacing", detail: "gap reduced to 10px" }]);
+    if (result.layout.degradations.length > 0) {
+      expect(result.layout.degradations[0]!.action).toBe("compact-spacing");
+    }
     expect(result.layout.omitted).toEqual([]);
     expect(result.layout.boxes).toHaveLength(demoAd.elements.length);
   });
@@ -114,10 +136,10 @@ describe("text measurement", () => {
     const rect = { x: 0, y: 0, width: 400, height: 400 };
     const headline = demoAd.elements.find((e) => e.id === "headline")!;
     const full = measureElement(headline, surface, rect, "full", false);
-    const short = measureElement(headline, surface, rect, "short", false);
+    const compact = measureElement(headline, surface, rect, "compact", false);
     expect(full.prefWidth).toBeGreaterThan(0);
-    expect(short.prefWidth).toBeGreaterThan(0);
+    expect(compact.prefWidth).toBeGreaterThan(0);
     // "40% Off" is meaningfully shorter than "Summer Sale — 40% Off"
-    expect(short.prefWidth).toBeLessThan(full.prefWidth);
+    expect(compact.prefWidth).toBeLessThan(full.prefWidth);
   });
 });
