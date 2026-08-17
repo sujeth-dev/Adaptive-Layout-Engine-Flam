@@ -1,7 +1,10 @@
 // Fuzz testing: hundreds of arbitrary surface profiles, none hand-picked.
 // For every successful resolution, every hard invariant must hold. For every
 // failure, it must be a typed ResolutionFailure, never a thrown exception or
-// broken geometry. A seeded PRNG keeps a failing run reproducible.
+// broken geometry. A seeded PRNG keeps a failing run reproducible. Per §20,
+// biased toward tight / ultra-wide / ultra-tall / large-safe-area / high-
+// floor corners — never toward a specific expected strategy, which stays an
+// emergent property of scoring, not something fuzz should assert on.
 
 import { describe, expect, it } from "vitest";
 import { demoAd } from "../src/spec";
@@ -9,7 +12,7 @@ import { resolveLayout } from "../src/resolver";
 import { findInvariantViolations } from "./helpers";
 import type { SurfaceProfile, ViewingDistance } from "../src/types";
 
-const RUNS = 400;
+const RUNS = 1000;
 const SEED = 20260815;
 
 // mulberry32 -- small, deterministic, dependency-free PRNG
@@ -28,30 +31,58 @@ function randInt(rand: () => number, min: number, max: number): number {
   return Math.floor(rand() * (max - min + 1)) + min;
 }
 
+type StressBias = "none" | "tight" | "ultraWide" | "ultraTall" | "largeSafeArea" | "highFloors";
+
+function pickBias(rand: () => number): StressBias {
+  const r = rand();
+  if (r < 0.6) return "none";
+  if (r < 0.7) return "tight";
+  if (r < 0.8) return "ultraWide";
+  if (r < 0.88) return "ultraTall";
+  if (r < 0.94) return "largeSafeArea";
+  return "highFloors";
+}
+
 function randomSurface(rand: () => number, index: number): SurfaceProfile {
-  // 20% of draws are biased toward the tight low-end corner (small dims + large
-  // constraints), since independently-uniform sampling across the full suggested
-  // range rarely lands on a genuinely impossible combination on its own.
-  const stressCorner = rand() < 0.2;
-  const width = stressCorner ? randInt(rand, 200, 360) : randInt(rand, 200, 1920);
-  const height = stressCorner ? randInt(rand, 120, 220) : randInt(rand, 120, 1200);
+  const bias = pickBias(rand);
   const viewingDistances: ViewingDistance[] = ["close", "medium", "far"];
 
-  const surface: SurfaceProfile = {
-    id: `fuzz-${index}`,
-    width,
-    height,
-  };
-  if (rand() < 0.5) {
+  let width: number;
+  let height: number;
+  switch (bias) {
+    case "tight":
+      width = randInt(rand, 80, 360);
+      height = randInt(rand, 80, 220);
+      break;
+    case "ultraWide":
+      width = randInt(rand, 1400, 2200);
+      height = randInt(rand, 80, 200);
+      break;
+    case "ultraTall":
+      width = randInt(rand, 80, 200);
+      height = randInt(rand, 1000, 1400);
+      break;
+    default:
+      width = randInt(rand, 80, 2200);
+      height = randInt(rand, 80, 1400);
+  }
+
+  const surface: SurfaceProfile = { id: `fuzz-${index}`, width, height };
+
+  const wantSafeArea = bias === "largeSafeArea" || rand() < 0.5;
+  if (wantSafeArea) {
+    const frac = bias === "largeSafeArea" ? 0.35 : 0.15;
     surface.safeArea = {
-      top: randInt(rand, 0, Math.floor(height * (stressCorner ? 0.3 : 0.15))),
-      bottom: randInt(rand, 0, Math.floor(height * (stressCorner ? 0.3 : 0.15))),
-      left: randInt(rand, 0, Math.floor(width * (stressCorner ? 0.3 : 0.15))),
-      right: randInt(rand, 0, Math.floor(width * (stressCorner ? 0.3 : 0.15))),
+      top: randInt(rand, 0, Math.floor(height * frac)),
+      bottom: randInt(rand, 0, Math.floor(height * frac)),
+      left: randInt(rand, 0, Math.floor(width * frac)),
+      right: randInt(rand, 0, Math.floor(width * frac)),
     };
   }
-  if (rand() < 0.6) surface.minTapTarget = randInt(rand, 0, stressCorner ? 90 : 72);
-  if (rand() < 0.6) surface.minTextSize = randInt(rand, 0, stressCorner ? 48 : 40);
+
+  const wantHighFloors = bias === "highFloors";
+  if (wantHighFloors || rand() < 0.6) surface.minTapTarget = randInt(rand, 0, wantHighFloors ? 120 : 72);
+  if (wantHighFloors || rand() < 0.6) surface.minTextSize = randInt(rand, 0, wantHighFloors ? 64 : 40);
   if (rand() < 0.4) surface.viewingDistance = viewingDistances[randInt(rand, 0, 2)];
   if (rand() < 0.3) surface.touchOnly = true;
   return surface;
@@ -92,19 +123,21 @@ describe("fuzz — random surface profiles", () => {
     // eslint-disable-next-line no-console
     console.log(`fuzz: ${successes} resolved, ${explicitFailures} explicit failures, ${invariantViolations.length} invariant violations`);
     expect(invariantViolations, invariantViolations.slice(0, 5).join("\n\n")).toEqual([]);
-    // sanity: the range (including the stress corner) should exercise both outcomes
+    // sanity: the range (including every stress corner) should exercise both outcomes
     expect(successes).toBeGreaterThan(0);
     expect(explicitFailures).toBeGreaterThan(0);
   });
 
   it("never throws, even on extreme edges of the fuzzed range", () => {
     const edgeCases: SurfaceProfile[] = [
-      { id: "min-both", width: 200, height: 120 },
-      { id: "max-both", width: 1920, height: 1200 },
-      { id: "min-width-max-height", width: 200, height: 1200 },
-      { id: "max-width-min-height", width: 1920, height: 120 },
+      { id: "min-both", width: 80, height: 80 },
+      { id: "max-both", width: 2200, height: 1400 },
+      { id: "min-width-max-height", width: 80, height: 1400 },
+      { id: "max-width-min-height", width: 2200, height: 80 },
       { id: "huge-tap-target", width: 400, height: 400, minTapTarget: 500 },
       { id: "huge-text-size", width: 400, height: 400, minTextSize: 300 },
+      { id: "invalid-safe-area", width: 400, height: 400, safeArea: { top: 500, right: 0, bottom: 0, left: 0 } },
+      { id: "impossible", width: 90, height: 80, minTapTarget: 44, minTextSize: 18 },
     ];
     for (const surface of edgeCases) {
       expect(() => resolveLayout(demoAd, surface)).not.toThrow();
