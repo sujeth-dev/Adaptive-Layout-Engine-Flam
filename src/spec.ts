@@ -7,13 +7,11 @@ export function defineAd(spec: AdSpec): AdSpec {
 
 /** The single demo ad. No surface geometry appears anywhere in this spec.
  *
- * Content-variant fields (`shortContent`/`shortLabel`/`icon`/`croppedAspectRatio`) and
- * `merges` are optional degradation-ladder hints, not layout — a spec that omits them
- * degrades purely geometrically (shrink/truncate/drop), exactly as before this field
- * existed. Declaring them here lets this specific ad demonstrate the fuller ladder:
- * headline/price can shorten, the CTA can shorten then collapse to an icon, the hero
- * can switch to a tighter crop, and price can fold into the CTA ("Buy $30") before
- * either is dropped outright. */
+ * `compactContent`/`compactLabel`/`croppedAspectRatio` are optional degradation-ladder
+ * hints, not layout — an element that omits one just has no rung for that particular
+ * compromise. Declaring them here lets this ad demonstrate the full ladder: headline,
+ * price, and the CTA can each switch to a shorter compact string, and the hero can
+ * switch to a tighter declared crop, before anything is hidden or dropped. */
 export const demoAd: AdSpec = defineAd({
   id: "demo-product-ad",
   elements: [
@@ -23,7 +21,7 @@ export const demoAd: AdSpec = defineAd({
       role: "primary",
       priority: 1,
       content: "Summer Sale — 40% Off",
-      shortContent: "40% Off",
+      compactContent: "40% Off",
     },
     {
       id: "product-image",
@@ -40,8 +38,7 @@ export const demoAd: AdSpec = defineAd({
       role: "action",
       priority: 2,
       label: "Shop Now",
-      shortLabel: "Shop 🛒",
-      icon: "🛒",
+      compactLabel: "Shop 🛒",
     },
     {
       id: "price",
@@ -49,9 +46,8 @@ export const demoAd: AdSpec = defineAd({
       role: "secondary",
       priority: 2,
       content: "$29.99",
-      shortContent: "$30",
+      compactContent: "$30",
     },
     { id: "logo", type: "image", role: "branding", priority: 3, alt: "Solstice", aspectRatio: 3.4 },
   ],
-  merges: [{ sourceIds: ["price"], targetId: "cta", mergedLabel: "Buy $30" }],
 });

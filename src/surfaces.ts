@@ -36,12 +36,26 @@ export const retailKiosk: SurfaceProfile = {
   touchOnly: true,
 };
 
+/** The fifth canonical checkpoint — tight enough that the compact-content and
+ * brand-hide rungs of the degradation ladder are required, not optional. Still
+ * a plain SurfaceProfile; the resolver never branches on its id. */
+export const constrainedStrip: SurfaceProfile = {
+  id: "constrainedStrip",
+  width: 510,
+  height: 90,
+  minTapTarget: 44,
+  minTextSize: 12,
+};
+
 export const requiredSurfaces: SurfaceProfile[] = [
   mobilePortrait,
   mobileLandscape,
   broadcastLowerThird,
   retailKiosk,
 ];
+
+/** The five golden checkpoints used by src/checkpoints.ts and the demo gallery. */
+export const canonicalDemoSurfaces: SurfaceProfile[] = [...requiredSurfaces, constrainedStrip];
 
 /** Helper for building a custom/unknown surface at runtime (demo controls, live interview 5th surface). */
 export function customSurface(input: SurfaceProfile): SurfaceProfile {
