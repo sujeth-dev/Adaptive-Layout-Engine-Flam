@@ -15,6 +15,7 @@ import type {
   SurfaceProfile,
   ValidationResult,
 } from "./types";
+import { measureActiveContentWidth } from "./measure";
 
 function ok<T>(value: T): ValidationResult<T> {
   return { ok: true, value };
@@ -191,6 +192,40 @@ export function validateCandidate(
         );
       }
     }
+
+    // Resolved font floor + genuine fit — no silent renderer ellipsis. Only
+    // text/button elements carry a resolved fontSize; anything else skips this.
+    if (element && (element.type === "text" || element.type === "button")) {
+      const fontSize = box.presentation.fontSize;
+      if (fontSize === undefined) {
+        reasons.push(`"${box.id}" is missing a resolved fontSize`);
+      } else {
+        if (fontSize < surface.minTextSize - EPS) {
+          reasons.push(`"${box.id}" resolved fontSize ${fontSize.toFixed(1)}px is below minTextSize ${surface.minTextSize}`);
+        }
+        const activeWidth = measureActiveContentWidth(element, box.presentation.variant, fontSize);
+        const horizontalBudget = element.type === "button" ? box.width - 32 : box.width;
+        if (activeWidth > horizontalBudget + EPS) {
+          reasons.push(`"${box.id}" active "${box.presentation.variant}" content does not fit its resolved box`);
+        }
+      }
+    }
+
+    // Hero aspect/crop rules — geometry may shrink, the image never stretches
+    // or squashes: the resolved box's aspect ratio must match whichever
+    // declared aspect (original or cropped) is currently active.
+    if (element?.type === "image" && element.role === "hero") {
+      const useCropped = box.presentation.cropped && element.croppedAspectRatio && element.croppedAspectRatio > 0;
+      const expectedAspect = useCropped
+        ? element.croppedAspectRatio!
+        : element.aspectRatio && element.aspectRatio > 0
+          ? element.aspectRatio
+          : 1;
+      const actualAspect = box.width / box.height;
+      if (Math.abs(actualAspect - expectedAspect) / expectedAspect > 0.02) {
+        reasons.push(`"${box.id}" aspect ratio ${actualAspect.toFixed(3)} does not match declared ${expectedAspect.toFixed(3)}`);
+      }
+    }
   }
 
   for (let i = 0; i < candidate.boxes.length; i++) {
@@ -200,6 +235,9 @@ export function validateCandidate(
       const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
       const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
       if (overlapX > EPS && overlapY > EPS) {
+        // Brand vs. hero/headline is called out by name in the spec, but it's
+        // the exact same AABB rule as every other pair — no separate check
+        // needed, this generic pairwise pass already forbids it.
         reasons.push(`"${a.id}" overlaps "${b.id}"`);
       }
     }
