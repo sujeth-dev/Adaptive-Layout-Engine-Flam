@@ -36,13 +36,15 @@ Then explain changed files briefly.
 
 ## Phase 2 — Resolver
 
-Build: `measure → candidate layouts → validate → score → degrade/retry → resolved layout`
+Build: `measure → candidate layouts → repair → validate → score → degrade/retry → resolved layout`
 
-Generic candidates: vertical, horizontal, split, grid.
+Generic candidates: stack, split, band, poster.
 
 Hard checks: bounds, no overlap, min text, min tap target, positive geometry.
 
-Degradation: `shrink → truncate → reposition → drop`. Lowest priority first.
+Degradation: fixed sequence — full gap → compact gap → brand hidden → price compact → CTA
+compact → price may drop → hero crop/shrink → headline compact → fail. CTA is never dropped;
+priority-1 elements only change presentation, never omitted from a successful layout.
 
 Test:
 - 4 required surfaces

@@ -297,57 +297,116 @@ Every element reports `{ min, preferred }` **derived from the surface's constrai
 
 **[BONUS]** Real text measurement via `canvas.measureText()` on an offscreen context. Cache by `(text, fontSize, family)` — never measure inside a placement loop.
 
-## B6. Candidate compositions **[CHOICE]**
+## B6. Candidate compositions **[CHOICE]** — final locked set
 
-Four parameterised strategies, each a pure function of the available rectangle. None knows any surface name.
+Four role-aware strategies, each a pure function of the available rectangle
+and the surface's own constraints. None knows any surface name.
 
-- **Vertical stack** — hero above a text column, CTA anchored below
-- **Horizontal band** — logo · hero · text column · CTA in a row
-- **Side-by-side split** — hero one side, text column the other
-- **Adaptive grid** — two-column arrangement for near-square rectangles
+- **Stack** — headline + reserved brand slot on top, price + CTA on the
+  bottom, hero the full legal middle remainder. Wins tall/narrow rectangles.
+- **Split** — headline + centered commerce (price/CTA) in a left column,
+  reserved brand slot + hero in a right column. Wins landscape phone ratios.
+- **Band** — fixed order `headline | hero | price | CTA | brand`, hero
+  absorbs horizontal slack, extra slack becomes a balanced outer margin.
+  Wins very wide/short rectangles.
+- **Poster** — headline + brand on top, a large centered hero (~82% width),
+  price + CTA on the bottom. Wins square/large rectangles.
+
+Superseded: the earlier vertical-stack/horizontal-band/side-by-side-split/
+adaptive-grid names and the near-square adaptive grid are retired — Poster
+replaces the grid's role for square/large surfaces with a hero-dominant
+composition instead.
 
 **Do not use hero-with-overlay.** It is visually attractive but places boxes on top of the hero, which muddies the "never overlaps" invariant the spec states flatly. Keep every element in its own non-overlapping rectangle.
 
-Each strategy returns a candidate **or `null`** when the rectangle can't accommodate it. Never a broken layout.
+Each strategy returns a candidate **or `null`** when the rectangle can't accommodate it — including when a required element (e.g. the hero) has nowhere legal to go. Never a candidate silently missing that element; a strategy that would drop an element from an otherwise-valid-looking layout must return `null` for the whole candidate instead.
+
+## B6.5. Repair — deterministic, between generation and validation
+
+`raw candidate → repair → hard validation`. `repairCandidate()` can only
+*improve* soft geometry — reserve hard minimums, then grow the candidate
+toward its strategy-specific target (Split's CTA fill, Band's hero-absorbs-
+slack, Poster's hero width, Stack's re-centering) — never relax a hard
+constraint and never invent a new content state. It never returns `null`;
+worst case, the raw candidate passes through unchanged. Validation always
+checks the *repaired* candidate, never the raw one — repair is a distinct,
+explicit stage before validation, not a validation exception.
 
 ## B7. Validation before scoring
 
 Reject any candidate where:
 - a box falls outside the safe-area rectangle
 - two visible boxes overlap (AABB: `a.x < b.x+b.w && b.x < a.x+a.w && a.y < b.y+b.h && b.y < a.y+a.h`)
-- any `fontSize < effectiveMinTextSize`
+- any resolved `fontSize < surface.minTextSize`
+- the active full/compact text does not genuinely fit its resolved box at its resolved font size (no silent renderer ellipsis)
 - any interactive box `height < minTapTarget`
 - any width or height is negative
+- the hero's resolved aspect ratio doesn't match whichever declared aspect (original or cropped) is currently active
 
 Return a **reason string**, not a boolean. Those reasons become your trace panel and your interview answers.
 
-## B8. Scoring **[CHOICE]** — commit to a formula
+## B8. Scoring **[CHOICE]** — final locked formula
 
-The 35% criterion lives here, so decide rather than listing options:
+The 35% criterion lives here:
 
 ```ts
-score =
-    0.30 * priorityValueRetained    // Σ(1/priority) of visible ÷ Σ(1/priority) of all
-  + 0.25 * heroShapeQuality         // 1 − normalised deviation from preferred aspect
-  + 0.20 * preferredSizeSatisfaction// mean(actual ÷ preferred), capped at 1
-  + 0.15 * spaceUtilisation         // 1 − |coverage − 0.72| ÷ 0.72
-  − 0.10 * truncationPenalty        // fraction of text elements truncated
+SCORE_WEIGHTS = {
+  priorityRetention: 0.25,
+  frameUsage: 0.18,
+  heroQualityAndProminence: 0.20,
+  visualBalance: 0.15,
+  preferredSize: 0.10,
+  hierarchyAndSpacing: 0.08,
+  alignmentConsistency: 0.04,
+};
+SCORE_PENALTIES = {
+  deadRegion: 0.12,
+  degradation: 0.08,
+  crop: 0.04,
+  excessiveEnlargement: 0.05,
+};
 ```
 
-Five terms, five weights summing to 1, each explainable in one sentence. Put this exact block in ARCHITECTURE.md with a line per term saying what it optimises for. Avoid scattered magic constants — that's what reads as machine-written.
+Eleven terms (seven positive, four penalties), every one explainable in a
+sentence, declared once in `score.ts` — no scattered magic constants.
+`frameUsage` and hero prominence both peak mid-range (85% coverage / 45%
+area) rather than rewarding maximum occupancy — a hero that eats the whole
+frame edge-to-edge is "overwhelming," not "prominent," and the old
+monotonic-then-capped curve couldn't tell the two apart. `deadRegionPenalty`
+checks the worst-covered half on each axis *and* the center third directly,
+so content pushed to the far edges with a hollow middle can't hide behind
+an otherwise-full bounding box. No term is keyed by strategy name or
+checkpoint dimension.
 
-## B9. Degradation ladder
+## B9. Degradation ladder — final locked sequence
 
-The spec's own order is **shrink → reposition → drop**. Our full ladder, applied lowest-priority-first, escalating only when a rung is exhausted at every lower priority:
+A **fixed sequence**, not per-priority-tier grouping, applied in this exact order — every rung reruns all four strategies:
 
-1. **Shrink** toward each element's minimum
-2. **Truncate** eligible text (`truncatable: true`)
-3. **Reposition** — re-run candidate generation with the reduced set
-4. **Drop** the lowest-priority droppable element
+```
+A. full content, default gap
+B. full content, compact gap
+C. brand hidden
+D. price -> compact
+E. CTA -> compact
+F. price may drop
+G. hero -> crop, then shrink
+H. headline -> compact
+I. no-valid-layout
+```
 
-Deterministic. Same input, same output, every time — "predictability of the degradation order" is written into the criteria.
+Deterministic. Same input, same output, every time — "predictability of the degradation order" is written into the criteria. **CTA is never dropped** — there is no CTA-drop rung; if CTA and a priority-1 element can't coexist, resolution fails instead.
 
-Invariant to enforce and test: **in any successful layout, no priority-1 element is dropped.** If the rectangle is genuinely impossible, return `{ ok: false }` rather than violating a hard constraint.
+Invariant to enforce and test: **in any successful layout, no priority-1 element is dropped or omitted.** If the rectangle is genuinely impossible, return `{ ok: false }` rather than violating a hard constraint.
+
+### Continuity (optional, additive)
+
+`resolveLayout(spec, surface, continuity?)` — a third, optional parameter.
+Omitted, it's the exact same pure function as above. Supplied (a live
+resize thread its previous winner through), `STRATEGY_SWITCH_MARGIN = 0.06`
+keeps the incumbent strategy unless a challenger wins by more, and
+`CONTENT_RESTORE_MARGIN = 0.08` requires an extra margin before restoring a
+compact role back to full — both prevent flicker without changing one-shot
+determinism.
 
 ## B10. Renderer
 
@@ -365,14 +424,15 @@ Not required by the spec, but it's how you evidence the 25% correctness criterio
 
 **Structural difference** — assert that 320×480 and 1920×250 select **different strategies**. This is a direct machine-check of the "meaningfully different, not uniformly scaled" requirement, and it's the single most on-target test you can write.
 
-**Fuzz** — sweep 500+ random surfaces (200×120 → 1920×1200, randomised `minTapTarget` and `minTextSize`), assert all invariants, print the pass rate, and put that number in the README.
+**Fuzz** — sweep 500+ random surfaces (200×120 → 1920×1200, randomised `minTapTarget` and `minTextSize`), assert all invariants, print the pass rate, and put that number in the README. *(Final: 1000 seeded surfaces, 80×80 → 2200×1400, biased toward tight/ultra-wide/ultra-tall/large-safe-area/high-floor corners — 0 invariant violations.)*
 
 ## B12. Demo app
 
-- Surface picker with the 4 required profiles
+- Surface picker with the 4 required profiles, plus the 5th canonical Constrained Strip checkpoint
 - Live width/height sliders — this *is* the "too little space" demonstration, and it doubles as your unseen-surface tool
 - **[CHOICE]** Custom surface input: width, height, `minTapTarget`, `minTextSize`, `viewingDistance`
 - **[CHOICE]** Resolver trace panel showing strategies tried, rejection reasons, scores, and degradation steps
+- **[CHOICE]** A checkpoint gallery rendering all five canonical surfaces through the real resolver + renderer at native scale, for at-a-glance verification without touching the controls
 
 The trace panel converts interview question 4 from a memory test into a demo. Highest-leverage optional thing you can build.
 

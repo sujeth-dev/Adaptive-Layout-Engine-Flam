@@ -7,12 +7,18 @@ spec.ts        — content + intent (elements, roles, priorities). No geometry.
 surfaces.ts     — geometry + hard constraints for known presets. No layout.
 validate.ts     — runtime validation (spec/surface) + candidate hard validation
                   + normalization. No decisions, only accept/reject.
-measure.ts      — content → min/preferred size. Framework-independent.
-strategies.ts   — content + rect → candidate geometry. Pure functions.
+measure.ts      — content → min/preferred size + shared sizing formulas.
+strategies.ts   — content + rect → raw candidate geometry. Pure functions.
+repair.ts       — raw candidate → geometry that fits its target proportions.
+                  Can only improve soft geometry, never relax a hard rule.
 score.ts        — candidate → number. Deterministic, no side effects.
 resolver.ts     — orchestrates all of the above + the degradation ladder.
                   The only file that makes a final decision.
+checkpoints.ts  — the five canonical checkpoint definitions. Golden test
+                  data only — never imported by an engine file.
 render-dom.tsx  — ResolvedLayout → DOM. Makes zero decisions.
+CheckpointGallery.tsx — renders the five checkpoints through the real
+                  resolver + renderer, for native visual verification.
 App.tsx         — demo chrome: picker, controls, trace panel. UI state only.
 ```
 
@@ -22,27 +28,64 @@ sideways into another's internals. `resolver.ts` is the only place that knows
 the full pipeline order; every other file is independently testable and
 independently explainable.
 
-None of `measure.ts`, `strategies.ts`, `validate.ts`, `score.ts`, or
-`resolver.ts` imports React. The resolver is plain TypeScript, provable by
+None of `measure.ts`, `strategies.ts`, `repair.ts`, `validate.ts`, `score.ts`,
+or `resolver.ts` imports React. The resolver is plain TypeScript, provable by
 `tsconfig.app.json` never pointing at the DOM lib for those files' actual
 usage — they'd compile equally well as a Node CLI tool.
+
+## Final target flow
+
+```
+Ad Spec + Surface Profile
+      ↓
+validate + normalize
+      ↓
+measure active content
+      ↓
+generate Stack / Split / Band / Poster
+      ↓
+repair candidate geometry
+      ↓
+hard validate
+      ↓
+score valid candidates
+      ↓
+winner
+      ↓
+if none fits: apply next priority degradation, rerun all four
+      ↓
+ResolvedLayout
+      ↓
+DOM renderer
+```
+
+The five known surfaces (`checkpoints.ts`) are golden verification points
+only — the resolver never reads a checkpoint id or dimension.
 
 ## Hard constraints vs. soft preferences
 
 **Hard constraints** (checked in `validate.ts`, a rejected candidate is
-never scored, never repaired):
+never scored):
 - every box inside the safe-area-adjusted rectangle
 - no two visible boxes overlap
 - no box below its measured minimum width/height
 - no interactive box below `minTapTarget`
 - positive width and height
+- resolved font size at or above `minTextSize`
+- the active full/compact text genuinely fits its resolved box at its
+  resolved font size — no silent renderer ellipsis
+- the hero's resolved aspect ratio matches whichever declared aspect
+  (original or cropped) is currently active — geometry may shrink, the
+  image never stretches or squashes
 
 **Soft preferences** (traded off by `score.ts`, never block a candidate):
+- priority-weighted content retention
+- frame usage (peaks mid-range, not at 100% occupancy)
+- hero aspect fidelity and prominence (also peaks mid-range)
+- opposing-edge visual balance
 - preferred element size vs. actual
-- hero image aspect ratio vs. actual
-- frame coverage and opposing-edge balance
-- consistent spacing rhythm and semantic hierarchy
-- keeping secondary/branding content visible rather than dropped
+- gap consistency, semantic hierarchy, and edge/origin alignment
+- dead-region avoidance, degradation, crop, and excessive-enlargement penalties
 
 The line matters: a candidate that violates a hard constraint is deleted
 from consideration before scoring ever runs. A candidate that merely scores
@@ -51,229 +94,277 @@ low is still a valid, renderable layout — it's just not the winner.
 ## Candidate generation
 
 Four strategies, each a pure function `(MeasuredElement[], Rect, gap,
-presentation) → LayoutCandidate | null`, run with both `natural` and
-`frame-fill` presentations:
+NormalizedSurfaceProfile) → LayoutCandidate | null`. **All four run for every
+surface, every time** — there is no `if (aspectRatio > X) useStrategy(Y)`
+anywhere. Each strategy is role-aware (looks up `"primary"`/`"hero"`/
+`"secondary"`/`"action"`/`"branding"`, never a specific element id) and
+produces exactly one raw, structurally-correct candidate; `repair.ts` is
+responsible for growing it toward its target proportions, not this file.
 
-- **`vertical-stack`** — every element stacked top-to-bottom in authored
-  reading order. In the demo that is headline → hero → CTA → price →
-  branding. Wins on tall/narrow rectangles.
-- **`horizontal-band`** — branding · hero · text-cluster · action as
-  side-by-side columns. Wins on very wide/short rectangles.
-- **`side-by-side-split`** — hero occupies one column, everything else
-  stacked in the other. A middle ground that often wins on landscape phone
-  aspect ratios.
-- **`adaptive-grid`** — a 2-column grid in content order. Tends to win on
-  near-square rectangles.
+- **`stack`** — top region: headline + a reserved brand slot. Bottom region:
+  price + CTA. Hero: the entire legal middle remainder, spanning the full
+  rect width (not padding-inset — it's the one element with no legibility
+  margin to protect). Wins on tall/narrow rectangles.
+- **`split`** — left column: headline, then price+CTA commerce centered in
+  the remaining height. Right column: a reserved brand slot, then hero
+  filling the rest (bleeding to the rect's own right/bottom edges). Hero
+  targets 56% of rect width (48–60% after repair); CTA targets 86% of the
+  copy column's width. Wins on landscape phone aspect ratios.
+- **`band`** — fixed left-to-right order `headline | hero | price | CTA |
+  brand`, never any other order. Fixed gaps; the hero absorbs whatever
+  horizontal slack remains (bounded by its own min/max share), and any
+  slack left after the hero's own cap becomes a balanced outer margin, not
+  stretched gaps. Wins on very wide/short rectangles.
+- **`poster`** — top: headline + brand. Center: a large hero targeting 82%
+  of the rect width (also bleeding past the text padding). Bottom: price +
+  CTA. Wins on square/large rectangles.
 
-Critically: **all four run for every surface, every time.** There is no
-`if (aspectRatio > X) useStrategy(Y)` anywhere. A strategy may produce
-geometry that overflows the rectangle or violates a floor — that's expected
-and by design; `validate.ts` is what rejects it, not the strategy itself.
-Adaptation emerges from *which strategies survive validation and score well
-against the actual rectangle*, not from a lookup table. This is what makes
-`mobilePortrait` (320×480) resolve to `vertical-stack` and
-`broadcastLowerThird` (1920×250) resolve to `horizontal-band` in the test
-suite — not because anything asked "is this surface wide," but because
-`vertical-stack`'s total height genuinely overflows a 250px-tall rectangle
-and gets rejected, while `horizontal-band` genuinely fits it.
+A strategy returns `null` when it genuinely can't place a required element
+(e.g. the hero has no legal room at all) — never a candidate silently
+missing that element. Dropping a box instead of the whole candidate would
+let a priority-1 element vanish from an otherwise "successful" layout, which
+is exactly the bug class this null-return discipline exists to prevent.
 
-A strategy returns `null` (not broken geometry) when it can't produce a
-sensible candidate at all — e.g. zero visible elements.
+## `repair.ts` — deterministic candidate repair
 
-`natural` preserves preferred dimensions. `frame-fill` expands by semantic
-role: primary text and hero approach the safe width, actions may become broad
-bars, while price and branding stay compact. It then distributes groups along
-the flow axis with balanced outer margins. Images always derive one dimension
-from their active aspect ratio; text and buttons have role-specific caps.
-This is candidate generation, not degradation, so choosing `frame-fill` adds
-no degradation record and never alters the content ladder.
+New stage between generation and hard validation: `raw candidate → repair →
+hard validation`. `repairCandidate()` can only *improve* soft geometry — it
+never relaxes a hard constraint and never invents a new content state — and
+it never returns `null`; worst case, the raw candidate passes through
+unchanged.
 
-Authored order and degradation order are intentionally separate. Vertical
-reading order follows `AdSpec.elements`; priority and role ordering are used
-only to decide which element may degrade next.
+Global steps, always applied:
+1. **clamp to rect** — translate (never shrink) any box a hair outside the
+   rect, defensive against floating point.
+2. **reserve hard minimums** — grow (from its own center) any box that fell
+   below its measured floor, as far as the rect allows.
+3. **rebalance margins** — recenter the whole composition's bounding box on
+   whichever axis has slack, so an earlier growth/shrink doesn't leave the
+   group drifted to one side. Skipped for `band`, which already balances
+   its own outer margin deliberately — running the generic rebalance on top
+   would shift content back into the padding it just respected.
+
+Per-strategy step, in between:
+- **Split** — recomputes the copy column's true available width from the
+  hero's actual placed position (not the strategy's pre-hero estimate) and
+  grows the CTA back toward its 86% target if slack remains.
+- **Band** — a defensive guard: if two adjacent non-hero members ended up
+  farther apart than the configured gap, pulls them back together and hands
+  the freed width to the hero instead of leaving it as dead space between
+  fixed elements.
+- **Poster** — grows the hero toward its 82% target width if the top/bottom
+  rows left more vertical room than the raw pass used, and keeps it
+  centered.
+- **Stack** — re-centers the hero if an earlier floor correction changed the
+  remainder's true bounds.
+
+`validate.ts` keeps its "reject, never repair" identity — it validates the
+*repaired* candidate, not the raw one, and remains the single authoritative
+backstop: if a repair step would require crossing a hard floor, it's simply
+skipped and left for validation to reject with a clear reason.
 
 ## Measurement and text sizing
 
-`measure.ts` estimates every element's min/preferred box size before any
-strategy runs. Two things about it matter enough to call out explicitly:
+`measure.ts` has two jobs: (1) a generic per-element min/preferred size pass
+that candidate generation and hard validation work against, and (2) the
+shared, strategy-callable formulas — `paddingFor`, `gapFor`, `compactGapFor`,
+`headlineFontFor`, `posterHeadlineFontFor`, `priceFontFor` (one curve per
+strategy — a Poster's price sits near a large hero and stays modest, a
+Band's price is the tallest text on the strip), `brandFontFor`,
+`heroMinWidthFor`, `buttonFontSize`, `ctaHeightFor` — every one a pure
+function of the surface's short axis (`min(rect.width, rect.height)`) and,
+where relevant, the surface's own floors. Strategies call these directly
+when placing headline/price/brand/CTA; this file never picks a strategy.
 
-- **Real text measurement, not a character-count guess.** `measureTextWidth()`
-  uses `CanvasRenderingContext2D.measureText()` with a font string built from
-  the same family/weight the CSS actually renders (`--font-serif`/`--font-sans`
-  in `App.css` — kept in sync by comment, not by import, since `measure.ts`
-  stays framework/DOM-independent by design). This runs in any real browser.
-  In Node (the test/fuzz suite), no canvas exists, so it falls back to a
-  character-count estimate — deliberately tuned as a slight *overestimate*
-  (`AVG_CHAR_WIDTH_FACTOR = 0.62`), so a box that "just barely" fits by the
-  estimate still has a little real slack once actual glyphs render, instead of
-  silently overflowing into `text-overflow: ellipsis` while the resolver
-  reports zero degradation. That gap — a box computed to *exactly* its
-  preferred width via a too-tight estimate, then visibly clipped by the real
-  browser font — was a genuine bug caught by screenshotting the running demo,
-  not a hypothetical.
-- **Button font and label measurement are shared functions**, called by both
-  `measure.ts` (to size the button's box) and `render-dom.tsx` (to render the
-  label). Earlier, `render-dom.tsx` derived its font size independently
-  from `box.height` (`box.height * 0.4`) instead of reusing the value
-  `measure.ts` had actually assumed when it computed the box's *width* — the
-  two numbers didn't agree, so a button could be sized for a 15px label and
-  then rendered at 17.6px, wrapping "Shop Now" onto two lines inside a fixed-
-  height pill. Natural presentation uses the exact shared base size;
-  frame-fill may enlarge it, but clamps that growth using the same measured
-  active-label width and the box's horizontal padding budget. `measureButton()`'s `minWidth` is
-  also now a hard floor of "the label fits on one line at this exact font
-  size" (`prefWidth`, not an arbitrary shrink fraction of it) — a button can
-  still shrink toward its tap-target floor in height, but never becomes
-  narrower than its own text needs.
+- **Real text measurement, not a character-count guess wherever avoidable.**
+  `measureTextWidth()` uses `CanvasRenderingContext2D.measureText()` with a
+  font string built from the same family/weight the CSS actually renders,
+  wherever a canvas is available (any real browser). In Node (the test/fuzz
+  suite), it falls back to a character-count estimate — a deliberate
+  overestimate, so a box that "just barely" fits by the estimate still has
+  slack once real glyphs render.
+- **Text boxes shrink their own font to genuinely fit, rather than being
+  clamped narrower than their content needs.** `strategies.ts`'s `sizeText`
+  takes an optional `maxWidth`; if the content's natural width at the
+  requested font size exceeds it, the font shrinks (down to
+  `surface.minTextSize`) until it fits, and the box is re-measured at that
+  size. Clamping a box's *width* without adjusting its font was a real bug
+  caught during development: it produced a box the active text genuinely
+  couldn't fit in, later rejected by validate.ts's active-text-fit check
+  (itself added to catch exactly this class of problem) — or, worse, passed
+  through onto a real page as silently clipped text.
+- **Button font and label measurement are shared functions**, called by
+  both `measure.ts`/`strategies.ts` (to size the button's box) and
+  `render-dom.tsx` (to render the label) — `activeContentFor` and
+  `measureActiveContentWidth` are the single source of truth for "what text
+  is active and how wide is it at this exact font size," so measurement and
+  rendering can never silently disagree.
 
 ## Candidate validation
 
-Validation happens in a separate pass from generation, on purpose:
-strategies are allowed to be geometrically naive (clamp width down, compute
-height from aspect ratio, done) because a single independent validator
-enforces every hard rule consistently, regardless of which strategy
-produced the candidate. This means adding a 5th strategy later requires
-zero changes to what counts as "valid" — the rules live in exactly one
-place (`validateCandidate` in `validate.ts`).
+Validation happens after repair, on purpose: strategies and repair are both
+allowed to be geometrically imperfect because a single independent
+validator enforces every hard rule consistently, regardless of which
+strategy produced the candidate or what repair did to it. This means adding
+a 5th strategy later requires zero changes to what counts as "valid" — the
+rules live in exactly one place (`validateCandidate` in `validate.ts`).
 
-Rejected candidates carry a specific reason string (`"cta" falls outside
-the safe-area bounds`, `"logo" overlaps "price"`), which is what powers the
-resolver trace panel in the demo — every rejection is visible, not silent.
+Rejected candidates carry specific reason strings (`"cta" falls outside the
+safe-area bounds`, `"logo" overlaps "price"`, `"headline" active "full"
+content does not fit its resolved box`), which is what powers the resolver
+trace panel in the demo — every rejection is visible, not silent.
 
 ## Scoring
 
 ```ts
-score =
-    0.30 × priorityRetained        // Σ(1/priority) of visible ÷ Σ(1/priority) of all
-  + 0.20 × frameCoverage           // strategy-aware X/Y extent across the safe rect
-  + 0.20 × heroShapeQuality        // 1 − normalized deviation from hero's preferred aspect ratio
-  + 0.10 × preferredSizeFidelity   // mean closeness to preferred dimensions
-  + 0.10 × edgeBalance             // similarity of opposing outer margins
-  + 0.10 × rhythmAndHierarchy      // gap consistency + semantic scale
-  − 0.10 × truncationPenalty       // fraction of visible elements marked truncated
-  − 0.01 × excessiveGrowthPenalty  // progressive charge above 2× preferred size
+SCORE_WEIGHTS = {
+  priorityRetention: 0.25,
+  frameUsage: 0.18,
+  heroQualityAndProminence: 0.20,
+  visualBalance: 0.15,
+  preferredSize: 0.10,
+  hierarchyAndSpacing: 0.08,
+  alignmentConsistency: 0.04,
+};
+
+SCORE_PENALTIES = {
+  deadRegion: 0.12,
+  degradation: 0.08,
+  crop: 0.04,
+  excessiveEnlargement: 0.05,
+};
 ```
 
-(`score.ts`, `SCORE_WEIGHTS`.)
+- **`priorityRetention`** (0.25) is the largest positive term because it
+  directly encodes the assignment's core rule: `Σ(1/priority)` of visible
+  elements over the same sum for all of them, so dropping a priority-1
+  element costs far more than dropping a priority-3 one.
+- **`frameUsage`** (0.18) and **`heroQualityAndProminence`**'s prominence
+  half (part of 0.20) both use the *same peak-then-taper curve shape*
+  (`1 - |actual - target| / target`) rather than rewarding growth
+  monotonically. `frameUsage` peaks around 85% coverage; hero prominence
+  peaks around 45% of the rect's area. This was a real, checkpoint-driven
+  fix: with a monotonic-then-capped prominence curve, a `stack` composition
+  whose hero fills nearly the entire square kiosk canvas out-scored the
+  intended hero-dominant-but-framed `poster` composition, because both hit
+  the cap and prominence stopped differentiating them. Peaking mid-range
+  instead of at the ceiling lets "large" and "overwhelming" score
+  differently.
+- **`visualBalance`** (0.15) compares left/right and top/bottom outer
+  margins.
+- **`preferredSize`** (0.10) rewards candidates that get closer to every
+  element's natural preferred size, with a shallow penalty for extreme
+  growth.
+- **`hierarchyAndSpacing`** (0.08) combines gap consistency with semantic
+  scale (hero area vs. largest other element, primary/action height vs.
+  secondary height).
+- **`alignmentConsistency`** (0.04) rewards fewer distinct box-origin
+  x/y values relative to element count — a composition that shares edges
+  reads as more deliberately aligned than one with every box on its own line.
+- **`deadRegionPenalty`** (−0.12) is region-aware: it checks the
+  worst-covered horizontal half, the worst-covered vertical half, *and* the
+  center third directly. The center-third check exists because a
+  composition that pushes all its content to the far left/right edges can
+  still score well on the half-based checks (each half has *some* content
+  near its own edge) while leaving a hollow, empty middle — exactly the
+  failure mode an early `poster` candidate produced on the ultra-wide
+  broadcast strip before this check was added.
+- **`degradationPenalty`** (−0.08) is the fraction of visible elements
+  currently compact or shrunk. **`cropPenalty`** (−0.04) is the fraction of
+  boxes currently cropped. **`excessiveEnlargementPenalty`** (−0.05) starts
+  only above 2× an element's preferred size.
 
-- **`priorityRetained`** is the largest term (0.30) because it directly
-  encodes the assignment's core rule: keeping high-priority content visible
-  matters more than any geometric quality. `1/priority` means priority-1
-  content contributes far more than priority-3.
-- **`frameCoverage`** (0.20) scores how much of the meaningful flow axes the
-  composition spans. Axis emphasis follows the candidate strategy, not a
-  named surface or device.
-- **`heroShapeQuality`** (0.20) penalizes stretching/squashing the hero
-  image away from its authored aspect ratio — a hero crammed into the wrong
-  shape looks broken even if it technically fits.
-- **`preferredSizeFidelity`** (0.10) rewards candidates that get closer
-  to every element's natural preferred size, not just the bare minimum.
-- **`edgeBalance`** (0.10) compares left/right and top/bottom outer margins;
-  a full composition pushed against one edge scores below a centered peer.
-- **`rhythmAndHierarchy`** (0.10) combines gap consistency with semantic
-  scale: hero/primary/action should lead without stretching compact metadata.
-- **`truncationPenalty`** (−0.10) is a small tie-breaker
-  that prefers a non-truncated candidate over an otherwise-similar
-  truncated one, without dominating the priority-retained term.
-- **`excessiveGrowthPenalty`** (−0.01) starts only above twice an element's
-  preferred size. It prevents semantic caps from becoming automatic targets.
-
-Weights are declared once, together, in `SCORE_WEIGHTS` — not scattered as
-inline magic numbers through the scoring functions.
+No term is keyed by strategy name or checkpoint dimension — the old
+per-strategy coverage-target lookup table is gone; `frameUsage` is now a
+single geometry-derived curve every strategy is scored against identically.
 
 `evaluateComposition()` also publishes normalized `coverageX`, `coverageY`,
 `balanceX`, `balanceY`, and `spacingConsistency` on every `ResolvedLayout`.
-The trace includes presentation and coverage for each valid candidate.
 
 ## Degradation
 
-`resolver.ts` groups elements into **priority tiers** (elements sharing a
-priority value), processed lowest-priority-tier-first — "lowest priority
-degrades first." One rung runs once, globally, before any tier is touched;
-the rest run per tier, in this order:
+`resolver.ts` runs a **fixed sequence**, not per-priority-tier grouping —
+every rung is tried in this exact order, and every rung reruns all four
+strategies against the mutated pool (this *is* "reposition"; there's no
+separate rung for it):
 
-0. **compact spacing** (once, globally) — retry with progressively tighter
-   gaps (`14px → 10px → 6px`) before touching any element's content or
-   geometry at all. `gap` is threaded as a parameter through every strategy
-   in `strategies.ts` (not a fixed constant), so this is still a pure
-   function of the attempt, never surface-branched.
-1. **merge** (declared button targets only) — if the spec declares an
-   `ElementMerge` (e.g. fold `price` into `cta` as "Buy $30"), and the
-   source elements are still present and none is priority-1, try removing
-   the sources and swapping the target's content. Fully generic:
-   `resolver.ts` only ever reads `spec.merges`, never a specific element id
-   — a spec with no merges behaves exactly as if this rung didn't exist.
-2. **shorten** — switch to a `shortContent`/`shortLabel` variant, if the
-   spec declares one for this element and a merge hasn't already replaced
-   its content.
-3. **iconify** (buttons only) — collapse to an `icon` glyph, if declared.
-4. **shrink** — set preferred size to measured minimum, retry.
-5. **truncate** (text only) — mark truncated (affects rendering + score), retry.
-6. **crop** (hero images only) — switch to `croppedAspectRatio`, if
-   declared, retry.
-7. **drop** (skipped entirely for priority-1 elements) — remove the
-   element, record why, retry.
+```
+A. full content, default gap
+B. full content, compact gap
+C. brand hidden
+D. price -> compact
+E. CTA -> compact
+F. price may drop
+G. hero -> crop, then shrink
+H. headline -> compact
+I. no-valid-layout
+```
 
-State is cumulative throughout: an element shortened/shrunk in one rung
-stays that way while later rungs run. This is why "reposition" isn't a
-separate rung — every retry already regenerates all 4 candidates from
-scratch against the (now-changed) pool, which *is* repositioning.
+- **A/B** try `gapFor(rect)` then `compactGapFor(rect)` — both pure
+  functions of the surface's short axis, never a fixed pixel constant —
+  before touching any element's content or geometry.
+- **C** removes branding from the pool entirely. "Compress in its reserved
+  slot" is already inherent to how strategies size brand dynamically from
+  `brandFontFor`/the surface — there's no separate pool state for it.
+- **D/E** switch price/CTA to their `compactContent`/`compactLabel`
+  variant, if the spec declares one.
+- **F** drops price outright (never priority-1 by spec convention, checked
+  explicitly rather than assumed).
+- **G** tries `croppedAspectRatio` first, then collapses the hero's
+  preferred size to its measured minimum (which preserves aspect — the
+  minimum height is derived as `minWidth / aspect`, not stretched).
+- **H** switches headline to `compactContent`, only as the last content
+  change before failure.
+- **CTA is never dropped.** If CTA and a priority-1 element can't coexist,
+  the whole resolution fails rather than dropping it — there is no CTA-drop
+  rung anywhere in the sequence.
+- **I** returns a typed `{ ok: false, reason: "no-valid-layout", ... }`
+  instead of ever emitting geometry that overlaps, clips, or violates a
+  floor.
 
-Priority-1 elements go through every content/geometry rung and can
-shorten/shrink/truncate/crop, but the drop branch — and merges that would
-remove a priority-1 source — are unconditionally skipped for them,
-enforcing "priority 1 never drops from a successful layout" structurally,
-not by convention.
+`ContentVariant` collapsed from the old three-way `full | short | icon` (plus
+a separate declarative merge mechanism) down to a plain `full | compact` —
+matching the locked final spec. `DegradationAction` is `"compact-spacing" |
+"compact" | "hide" | "shrink" | "crop" | "drop"`.
 
-All of the new fields driving this (`shortContent`, `shortLabel`, `icon`,
-`croppedAspectRatio`, `AdSpec.merges`) are **optional and additive** — a
-spec that declares none of them degrades exactly as it did before this
-existed (pure shrink → truncate → drop).
+### Continuity — optional, additive resize hysteresis
 
-### Recording what actually happened, honestly
+`resolveLayout(spec, surface, continuity?)` takes an optional third
+parameter:
 
-Recording "the one rung whose own attempt succeeded" turned out to be an
-incomplete story: state is cumulative, so an *earlier* element can be left
-silently shortened/shrunk by an attempt that ultimately failed, while a
-*different*, later element's rung is what actually succeeds — a per-rung
-record would miss that earlier element's change entirely. This was caught
-by the fuzz suite (`assertInvariants` failing with a false "below floor"
-report once shortened content was involved) after this feature landed, not
-guessed in advance.
+```ts
+interface ContinuityHint {
+  previousStrategy: string;
+  previousContentVariantByRole?: Partial<Record<ElementRole, ContentVariant>>;
+}
+```
 
-The fix: `buildSuccess()` diffs the pool's state at the moment of success
-against its state at the very start of resolution
-(`diffContentDegradations()`), and reports every element whose
-shrunk/truncated/contentVariant/cropped state actually changed — regardless
-of which specific rung's attempt happened to be the one that succeeded.
-`drop` and `merge` still have to be recorded explicitly at the point they
-happen (they remove elements from the pool entirely, so they can't be
-recovered by diffing pool membership by id afterward), but the merge case
-is *also* covered by the diff as a fallback (a button's `label` differing
-from its original spec value implies a merge happened), for the same
-"cumulative but not the rung that succeeded" reason.
+Omitting it reproduces the exact one-shot behavior every test/checkpoint
+above relies on — `(spec, surface, continuity)` is still a pure function of
+its inputs, always. When a hint is supplied (App.tsx threads the previous
+winner while the user drags the width/height sliders, and resets it on a
+preset/spec change), two margins prevent flicker during a live resize:
 
-One more consequence worth naming: **a single element can carry multiple
-simultaneous degradation records** — e.g. a button both `merge`d and then
-`iconify`d in the same resolve. Every consumer of `layout.degradations`
-(the invariant checker, `render-dom.tsx`) looks up records by *action
-category*, never by id alone (a naive `Map` keyed by id silently collapses
-multiple records for the same element down to one, which is exactly the bug
-this section describes catching). `render-dom.tsx` in particular resolves
-rendering precedence by degradation *depth* — icon-only wins over merge,
-which wins over shorten, which wins over the original content — because
-that's the same precedence `measure.ts` used when it sized the box; getting
-this wrong reproduces the exact "box too small for its own label" class of
-bug described in [Measurement and text sizing](#measurement-and-text-sizing).
+- `STRATEGY_SWITCH_MARGIN = 0.06` — the incumbent strategy is kept unless a
+  challenger beats it by at least this much. Computed for free inside the
+  existing all-strategies loop (`attemptResolution` also tracks the best
+  score for whichever candidate matches `continuity.previousStrategy`, if
+  any), so applying the margin never re-runs a strategy.
+- `CONTENT_RESTORE_MARGIN = 0.08` — if a role was compact on the previous
+  step and the current step's full-content rung (A/B) would restore it,
+  the restoration only happens if full scores at least this much better
+  than staying compact; otherwise the resolver holds the role compact.
+
+`render-dom.tsx` never sees a `ContinuityHint` — the resize-smoothing
+decision lives entirely in the resolver, not the renderer.
 
 ## Failure semantics
 
-If the degrade loop exhausts every element (all lower-priority content
-shrunk/truncated/dropped, priority-1 content shrunk to its floor) and still
-nothing validates, `resolveLayout` returns:
+If the ladder exhausts every rung and still nothing validates,
+`resolveLayout` returns:
 
 ```ts
-{ ok: false, reason: "no-valid-layout", message: "...", details: string[] }
+{ ok: false, reason: "no-valid-layout", message: "...", details: string[], attempts: ResolutionAttempt[] }
 ```
 
 instead of ever emitting geometry that overlaps, clips, or violates a
@@ -282,17 +373,27 @@ floor. The same typed-failure path (`ResolveResult`) also covers
 layout attempt runs. A caller can exhaustively `switch` on `reason` and the
 compiler will hold them to it.
 
+## Typed diagnostics
+
+Every rung records a `ResolutionAttempt { label, candidates:
+CandidateDiagnostic[], winnerStrategy? }` — one diagnostic per strategy
+tried, valid-with-score or invalid-with-reasons. `ResolvedLayout.attempts`
+(and `ResolutionFailure.attempts`) expose the full structured ladder
+trajectory, so the demo's trace panel reads typed data directly instead of
+parsing the human-readable `trace: string[]` (still present, for debugging
+and the "view full trace" disclosure).
+
 ## Extensibility
 
 - **New surface**: pass any `SurfaceProfile` to `resolveLayout`. Nothing in
-  the resolver, strategies, or validator references surface identity —
-  proven by the "unknown 5th surface" test and by the demo's "Custom /
-  unseen 5th surface" control, which is just user input flowing into the
-  exact same function.
+  the resolver, strategies, repair, or validator references surface
+  identity — proven by the "unknown 5th surface" test and by the demo's
+  "Custom / unseen 5th surface" control, which is just user input flowing
+  into the exact same function.
 - **New renderer (e.g. Canvas)**: consumes `ResolvedLayout` — an array of
-  `{ id, x, y, width, height }` boxes plus metadata. A Canvas renderer would
-  read the same structure `render-dom.tsx` does and draw instead of
-  positioning DOM nodes. Zero resolver changes.
+  `{ id, x, y, width, height, presentation }` boxes plus metadata. A Canvas
+  renderer would read the same structure `render-dom.tsx` does and draw
+  instead of positioning DOM nodes. Zero resolver changes.
 - **Broadcast safe area**: already modeled — `SurfaceProfile.safeArea`
   becomes the available-rectangle transformation every strategy operates
   within. A wider broadcast safe area is just a different `SafeArea` value.
@@ -301,23 +402,44 @@ compiler will hold them to it.
   rectangle" concept the resolver already consumes. No new layout path
   needed, only a new way to compute `Rect` from a print-oriented profile.
 
+## Verification model
+
+Five layers, each catching a different class of problem:
+
+1. **Node/vitest unit and integration tests** (`tests/*.test.ts`) — the fast
+   inner loop; run on every change.
+2. **Checkpoint tests** (`tests/checkpoints.test.ts`) — the five canonical
+   surfaces, locked against `src/checkpoints.ts`'s definitions, asserting
+   strategy choice and the specific structural targets from the spec
+   (hero share ranges, CTA fill ranges, x-ordering, etc.) with tolerances,
+   not exact-pixel snapshots.
+3. **Fuzz** (`tests/fuzz.test.ts`) — 1000 seeded-random surfaces biased
+   toward tight/ultra-wide/ultra-tall/large-safe-area/high-floor corners,
+   asserting zero invariant violations on every success and a typed,
+   non-empty-message failure (never a thrown exception) on every rejection.
+4. **Continuity** (`tests/continuity.test.ts`) — no local strategy
+   oscillation across a resize path or in a ±24px neighborhood around each
+   checkpoint.
+5. **Playwright** (`e2e/`, `tests/browser/`) — real Canvas
+   `measureText()`, zero DOM text overflow, and screenshots through the
+   real `CheckpointGallery` — supporting evidence, never the only
+   correctness source.
+
 ## Deliberate non-rule-violations worth flagging
 
 `src/App.css` has two `@media` queries, neither of which is an ad-layout
 media query:
 
-- `@media (max-width: 1000px)` recomposes the demo's own three panels
-  (surface picker / preview / trace) for narrow browser windows — UI chrome
-  for *this repository's demo harness*, not the ad layout engine. Every ad
-  element's position still comes from inline styles computed directly from
-  `ResolvedBox` coordinates in `render-dom.tsx`, completely independent of
-  viewport size or any media query.
-- `@media (prefers-reduced-motion: reduce)` disables CSS transitions
-  (hover states, the copy-trace success flash, the trace disclosure chevron)
-  for users who've asked the OS for less motion. It only ever touches
-  `transition`, never `position`/`width`/`height`/`font-size` — it cannot
-  change where or how big anything renders, so it carries no layout
-  decision at all.
+- `@media (max-width: 1000px)` recomposes the demo's own panels (surface
+  picker / preview / checkpoint gallery / trace) for narrow browser windows
+  — UI chrome for *this repository's demo harness*, not the ad layout
+  engine. Every ad element's position still comes from inline styles
+  computed directly from `ResolvedBox` coordinates in `render-dom.tsx`,
+  completely independent of viewport size or any media query.
+- `@media (prefers-reduced-motion: reduce)` disables CSS transitions for
+  users who've asked the OS for less motion. It only ever touches
+  `transition`, never `position`/`width`/`height`/`font-size` — it carries
+  no layout decision at all.
 
 The assignment's "no media-query layout engine" rule is about how the *ad*
 is composed; neither query touches that.
