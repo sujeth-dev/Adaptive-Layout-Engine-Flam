@@ -10,6 +10,7 @@ import { demoAd } from "../src/spec";
 import { resolveLayout } from "../src/resolver";
 import { measureElement } from "../src/measure";
 import { normalizeSurfaceProfile } from "../src/validate";
+import { qrLandingPanel } from "../src/surfaces";
 import type { SurfaceProfile } from "../src/types";
 import { assertInvariants as assertInvariantsShared } from "./helpers";
 
@@ -34,6 +35,24 @@ describe("degradation ladder — brand hides first", () => {
     for (const id of ["headline", "product-image", "price", "cta"]) {
       const box = result.layout.boxes.find((b) => b.id === id)!;
       expect(box.presentation.variant).toBe("full");
+    }
+  });
+});
+
+describe("degradation ladder — the demo's own tight preset (QR landing panel)", () => {
+  it("hides branding cleanly while headline/hero/price/CTA stay at full content, in the demo picker's real surface", () => {
+    const result = resolveLayout(demoAd, qrLandingPanel);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    assertInvariants(result.layout, qrLandingPanel);
+
+    expect(result.layout.omitted).toEqual([{ id: "logo", reason: "hidden to reserve space for higher-priority content" }]);
+    expect(result.layout.boxes.some((b) => b.id === "logo")).toBe(false);
+
+    for (const id of ["headline", "product-image", "price", "cta"]) {
+      const box = result.layout.boxes.find((b) => b.id === id)!;
+      expect(box.presentation.variant).toBe("full");
+      expect(box.presentation.visible).toBe(true);
     }
   });
 });

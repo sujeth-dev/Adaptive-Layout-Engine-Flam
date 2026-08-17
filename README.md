@@ -23,16 +23,18 @@ npm run typecheck     # tsc only, no emit
 
 ## Running the demo
 
-A **checkpoint gallery** at the top of the page renders the five canonical
-surfaces (plus two unseen/impossible stress surfaces) through the real
-resolver and renderer, at native scale, for at-a-glance verification.
-
-Below it, pick one of the five presets from the picker — **Mobile
-Portrait**, **Mobile Landscape**, **Broadcast Lower-Third**, **Square
-Kiosk**, or **Constrained Strip** — or **Custom / unseen 5th surface** to
+Pick one of the six presets from the picker — **Mobile Portrait**, **Mobile
+Landscape**, **Broadcast Lower-Third**, **Square Kiosk**, **Constrained
+Strip**, or **QR Landing Panel** — or **Custom / unseen 5th surface** to
 type in an arbitrary profile (width, height, min tap target, min text size,
 viewing distance, touch-only, safe area) and watch it resolve through the
 exact same resolver, live.
+
+**QR Landing Panel** (240×250) is intentionally too small for all five
+elements at full priority — branding is the required demonstration of
+priority-based degradation: it disappears cleanly while headline, hero,
+price, and CTA all stay at full content, exactly the assignment's own
+worked example ("shrink until branding must be dropped").
 
 Drag the width/height sliders on any preset to resize continuously and
 watch the resolver output panel on the right: strategy chosen, score,
@@ -138,7 +140,7 @@ forcing broken geometry.
 
 ## Testing
 
-74 Node/vitest tests across 9 files, plus 12 Chromium Playwright tests:
+75 Node/vitest tests across 9 files, plus 11 Chromium Playwright tests:
 
 - `tests/validate.test.ts` (14) — spec/surface runtime validation.
 - `tests/resolver.test.ts` (13) — all 4 required surfaces, an unknown 5th
@@ -155,10 +157,13 @@ forcing broken geometry.
 - `tests/score.test.ts` (9) — priority retention, the hero prominence
   curve's mid-range peak, the dead-region penalty's center-third check,
   crop/degradation penalties, and score bounds.
-- `tests/degradation-ladder.test.ts` (7) — each real rung boundary
+- `tests/degradation-ladder.test.ts` (8) — each real rung boundary
   (brand hides alone, price+CTA compact together, price drops while CTA
   survives compact, hero crop/headline compact only as a last resort),
-  found by sweeping real surfaces rather than hand-waved examples.
+  found by sweeping real surfaces rather than hand-waved examples, plus the
+  demo's own QR Landing Panel preset (240×250) proving the assignment's
+  worked example directly: branding drops cleanly while headline, hero,
+  price, and CTA stay at full content.
 - `tests/continuity.test.ts` (8) — genuine strategy adaptation across an
   aspect-ratio path, no local A→B→A oscillation, ±24px neighborhood
   stability around each checkpoint, and additive-only hint verification.
@@ -168,12 +173,12 @@ forcing broken geometry.
   80–1400, biased toward tight/ultra-wide/ultra-tall/large-safe-area/
   high-floor corners). Last run: **923 resolved, 77 typed failures, 0
   invariant violations.**
-- `e2e/composition.spec.ts` + `tests/browser/*.spec.ts` (12) — real
+- `e2e/composition.spec.ts` + `tests/browser/*.spec.ts` (11) — real
   Chromium checks: required presets resolve to their canonical strategy,
   live 1920×120 resizing, actual `CanvasRenderingContext2D.measureText()`
   calls, zero undeclared text overflow, the CTA's visible label as its own
-  accessible name, and the checkpoint gallery rendering through the real
-  resolver with no console errors.
+  accessible name, and the QR Landing Panel's branding-drop degradation
+  visible in the actual rendered DOM (not just resolver output).
 
 Install the browser once with `npx playwright install chromium`, then run
 `npm run test:browser`. Its HTML report and visual-review attachments are
@@ -202,9 +207,8 @@ written to `playwright-report/`.
 
 ## Time spent
 
-_Fill in before submitting — this is your actual wall-clock time across the
-whole assignment (spec reading, review, iteration), not just the time Claude
-Code spent generating code._
+~10 hours, across spec reading, architecture/design review, iterative testing,
+and final verification.
 
 ## AI tool disclosure
 

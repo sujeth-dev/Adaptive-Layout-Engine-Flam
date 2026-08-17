@@ -17,8 +17,6 @@ resolver.ts     — orchestrates all of the above + the degradation ladder.
 checkpoints.ts  — the five canonical checkpoint definitions. Golden test
                   data only — never imported by an engine file.
 render-dom.tsx  — ResolvedLayout → DOM. Makes zero decisions.
-CheckpointGallery.tsx — renders the five checkpoints through the real
-                  resolver + renderer, for native visual verification.
 App.tsx         — demo chrome: picker, controls, trace panel. UI state only.
 ```
 
@@ -421,9 +419,9 @@ Five layers, each catching a different class of problem:
    oscillation across a resize path or in a ±24px neighborhood around each
    checkpoint.
 5. **Playwright** (`e2e/`, `tests/browser/`) — real Canvas
-   `measureText()`, zero DOM text overflow, and screenshots through the
-   real `CheckpointGallery` — supporting evidence, never the only
-   correctness source.
+   `measureText()`, zero DOM text overflow, and the QR Landing Panel's
+   branding-drop degradation verified in the actual rendered DOM —
+   supporting evidence, never the only correctness source.
 
 ## Deliberate non-rule-violations worth flagging
 
@@ -431,7 +429,7 @@ Five layers, each catching a different class of problem:
 media query:
 
 - `@media (max-width: 1000px)` recomposes the demo's own panels (surface
-  picker / preview / checkpoint gallery / trace) for narrow browser windows
+  picker / preview / trace) for narrow browser windows
   — UI chrome for *this repository's demo harness*, not the ad layout
   engine. Every ad element's position still comes from inline styles
   computed directly from `ResolvedBox` coordinates in `render-dom.tsx`,

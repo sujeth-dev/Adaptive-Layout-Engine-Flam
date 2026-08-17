@@ -47,6 +47,20 @@ export const constrainedStrip: SurfaceProfile = {
   minTextSize: 12,
 };
 
+/** Deliberately too little space for all five elements at full priority — the
+ * assignment's own worked example ("shrink until branding must be dropped —
+ * branding disappears cleanly while headline/CTA remain intact"). Branding
+ * (priority 3) is hidden; headline, hero, price, and CTA stay at full content.
+ * Sized and named after the assignment brief's own "print-to-digital QR
+ * landing panel" surface example. */
+export const qrLandingPanel: SurfaceProfile = {
+  id: "qrLandingPanel",
+  width: 240,
+  height: 250,
+  minTapTarget: 44,
+  minTextSize: 12,
+};
+
 export const requiredSurfaces: SurfaceProfile[] = [
   mobilePortrait,
   mobileLandscape,
@@ -54,7 +68,7 @@ export const requiredSurfaces: SurfaceProfile[] = [
   retailKiosk,
 ];
 
-/** The five golden checkpoints used by src/checkpoints.ts and the demo gallery. */
+/** The five golden checkpoints used by src/checkpoints.ts. */
 export const canonicalDemoSurfaces: SurfaceProfile[] = [...requiredSurfaces, constrainedStrip];
 
 /** Helper for building a custom/unknown surface at runtime (demo controls, live interview 5th surface). */

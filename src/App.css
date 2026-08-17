@@ -143,12 +143,6 @@ button {
   margin-bottom: var(--s3);
 }
 
-.app-header .tagline {
-  font-size: var(--text-body);
-  color: var(--ink-soft);
-  max-width: 56ch;
-}
-
 .status-chip {
   display: flex;
   align-items: center;
@@ -1031,52 +1025,6 @@ select:focus-visible {
 
 .resolver-failure + .trace-disclosure {
   margin-top: var(--s4);
-}
-
-/* ============ checkpoint gallery ============ */
-.gallery {
-  margin-bottom: var(--s5);
-  border: 1px solid var(--rule);
-  padding: var(--s5);
-  background: var(--paper-raised);
-}
-
-.gallery-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--s5);
-  margin-top: var(--s4);
-}
-
-.gallery-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
-}
-
-.gallery-card-stage {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--rule);
-  background: var(--paper-sunken);
-  overflow: hidden;
-  height: 180px;
-}
-
-.gallery-card-caption {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: var(--text-mono-faint);
-  color: var(--taupe);
-}
-
-.gallery-card-caption .strategy {
-  color: var(--accent-ink);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 /* ============ footer ============ */

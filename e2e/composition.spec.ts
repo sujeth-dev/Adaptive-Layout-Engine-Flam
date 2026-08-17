@@ -90,6 +90,7 @@ test("required surfaces resolve to their canonical strategy with no overflow", a
     { button: "Broadcast Lower-Third", strategy: "band" },
     { button: "Square Kiosk", strategy: "poster" },
     { button: "Constrained Strip", strategy: "band" },
+    { button: "QR Landing Panel", strategy: "stack" },
   ];
 
   for (const item of cases) {
@@ -127,6 +128,22 @@ test("live extreme dimension changes re-resolve without clipping", async ({ page
     }));
   });
   expect(bounds.every((box) => box.left >= 0 && box.top >= 0 && box.right <= box.width && box.bottom <= box.height)).toBe(true);
+});
+
+test("QR Landing Panel visibly demonstrates priority degradation: branding drops, headline/hero/price/CTA stay intact", async ({ page }, testInfo) => {
+  await page.getByRole("button", { name: /QR Landing Panel/ }).click();
+  const surface = page.locator(".panel.preview .surface-canvas");
+  await expect(surface).toBeVisible();
+
+  const ids = await surface.locator("[data-element-id]").evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.elementId));
+  expect(ids).toEqual(expect.arrayContaining(["headline", "product-image", "cta", "price"]));
+  expect(ids).not.toContain("logo");
+  expect(await overflowingContent(surface)).toEqual([]);
+
+  await testInfo.attach("qr-landing-panel-brand-dropped", {
+    body: await surface.screenshot(),
+    contentType: "image/png",
+  });
 });
 
 test("the CTA's visible label is always its own accessible name", async ({ page }) => {

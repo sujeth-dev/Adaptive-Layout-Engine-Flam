@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { demoAd } from "./spec";
-import { broadcastLowerThird, constrainedStrip, mobileLandscape, mobilePortrait, retailKiosk } from "./surfaces";
+import { broadcastLowerThird, constrainedStrip, mobileLandscape, mobilePortrait, qrLandingPanel, retailKiosk } from "./surfaces";
 import { resolveLayout } from "./resolver";
 import { RenderedSurface } from "./render-dom";
-import CheckpointGallery from "./CheckpointGallery";
 import type {
   CandidateDiagnostic,
   ContinuityHint,
@@ -23,6 +22,7 @@ const PRESETS: { id: string; label: string; profile: SurfaceProfile }[] = [
   { id: "broadcastLowerThird", label: "Broadcast Lower-Third", profile: broadcastLowerThird },
   { id: "retailKiosk", label: "Square Kiosk", profile: retailKiosk },
   { id: "constrainedStrip", label: "Constrained Strip", profile: constrainedStrip },
+  { id: "qrLandingPanel", label: "QR Landing Panel", profile: qrLandingPanel },
 ];
 
 // The frame the preview renders inside. Surfaces smaller than the frame get a
@@ -117,15 +117,12 @@ export default function App() {
         <div className="lead">
           <p className="kicker">System — Constraint Resolver</p>
           <h1>Adaptive Layout Engine</h1>
-          <p className="tagline">One ad spec, resolved live against whatever surface constraints you give it. No per-surface layout branches.</p>
         </div>
         <div className="status-chip">
           <span className={`dot ${result.ok ? "" : "dot-fail"}`} />
           {surface.id} — {result.ok ? "resolved" : "failed"}
         </div>
       </header>
-
-      <CheckpointGallery />
 
       <div className="app-body">
         <main className="panel preview">

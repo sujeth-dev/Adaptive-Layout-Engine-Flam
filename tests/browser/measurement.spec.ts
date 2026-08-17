@@ -12,6 +12,7 @@ const SURFACES = [
   { button: "Broadcast Lower-Third" },
   { button: "Square Kiosk" },
   { button: "Constrained Strip" },
+  { button: "QR Landing Panel" },
 ];
 
 async function overflowingText(surface: Locator) {

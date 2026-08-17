@@ -1,6 +1,6 @@
 // The five canonical demo checkpoints. These are golden verification targets
-// for tests/checkpoints.test.ts and the CheckpointGallery demo — never an
-// input to the resolver. This file must never be imported by an engine file
+// for tests/checkpoints.test.ts — never an input to the resolver. This file
+// must never be imported by an engine file
 // (types.ts, measure.ts, strategies.ts, repair.ts, validate.ts, score.ts,
 // resolver.ts): the resolver only ever sees a SurfaceProfile, never a
 // checkpoint id, so an arbitrary sixth surface goes through the exact same
