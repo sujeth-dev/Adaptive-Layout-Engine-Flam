@@ -1,24 +1,32 @@
 // Deterministic candidate scoring. Hard validation always runs first; these
-// soft metrics choose the most useful, balanced composition among valid boxes.
+// soft metrics choose the most useful, balanced composition among valid
+// candidates. Every term is a pure function of resolved geometry — nothing
+// here keys off a strategy name or a checkpoint dimension.
 
-import type { AdElement, CompositionMetrics, LayoutCandidate, MeasuredElement, Rect } from "./types";
+import type { AdElement, CompositionMetrics, LayoutCandidate, MeasuredElement, Rect, ResolvedBox } from "./types";
 
 export const SCORE_WEIGHTS = {
-  priorityRetained: 0.3,
-  frameCoverage: 0.2,
-  heroShape: 0.2,
+  priorityRetention: 0.25,
+  frameUsage: 0.18,
+  heroQualityAndProminence: 0.2,
+  visualBalance: 0.15,
   preferredSize: 0.1,
-  edgeBalance: 0.1,
-  rhythmAndHierarchy: 0.1,
-  truncationPenalty: 0.1,
-  excessiveGrowthPenalty: 0.01,
+  hierarchyAndSpacing: 0.08,
+  alignmentConsistency: 0.04,
+};
+
+export const SCORE_PENALTIES = {
+  deadRegion: 0.12,
+  degradation: 0.08,
+  crop: 0.04,
+  excessiveEnlargement: 0.05,
 };
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function priorityRetained(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>, allElements: AdElement[]): number {
+function priorityRetention(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>, allElements: AdElement[]): number {
   const totalValue = allElements.reduce((sum, element) => sum + 1 / element.priority, 0);
   if (totalValue <= 0) return 1;
   const visibleValue = candidate.boxes.reduce((sum, box) => {
@@ -28,14 +36,33 @@ function priorityRetained(candidate: LayoutCandidate, poolById: Map<string, Meas
   return visibleValue / totalValue;
 }
 
-function heroShapeQuality(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
+/** Peaks at ~85% coverage, tapers off on both sides — a sparse composition
+ * is penalized for wasting the frame, but 100% occupancy isn't automatically
+ * "better" than a well-composed 85%. */
+function usageCurve(coverage: number): number {
+  return clamp01(1 - Math.abs(coverage - 0.85) / 0.85);
+}
+
+function frameUsage(metrics: CompositionMetrics): number {
+  return (usageCurve(metrics.coverageX) + usageCurve(metrics.coverageY)) / 2;
+}
+
+function heroQualityAndProminence(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>, rect: Rect): number {
   const heroes = candidate.boxes.filter((box) => poolById.get(box.id)?.element.role === "hero");
   if (heroes.length === 0) return 1;
+  const rectArea = rect.width * rect.height;
   const scores = heroes.map((box) => {
     const item = poolById.get(box.id)!;
     const preferredAspect = item.measurement.prefWidth / item.measurement.prefHeight;
     const actualAspect = box.width / box.height;
-    return clamp01(1 - Math.abs(actualAspect - preferredAspect) / preferredAspect);
+    const aspectFidelity = clamp01(1 - Math.abs(actualAspect - preferredAspect) / preferredAspect);
+    // Peaks around ~45% of the frame — a hero doesn't need to eat the whole
+    // surface to read as prominent, and one that DOES eat the whole surface
+    // (edge-to-edge, no room for anything else to breathe) reads as crowding,
+    // not confidence. Same shape as frameUsage's curve, different center.
+    const areaRatio = rectArea > 0 ? (box.width * box.height) / rectArea : 0;
+    const prominence = clamp01(1 - Math.abs(areaRatio - 0.45) / 0.45);
+    return aspectFidelity * 0.5 + prominence * 0.5;
   });
   return scores.reduce((sum, value) => sum + value, 0) / scores.length;
 }
@@ -45,11 +72,11 @@ function dimensionFidelity(actual: number, preferred: number): number {
   const ratio = actual / preferred;
   if (ratio <= 1) return clamp01(ratio);
   // Growth is allowed to earn better frame use, but extreme enlargement is a
-  // visible compromise. The shallow slope keeps a useful fill candidate viable.
+  // visible compromise — the shallow slope keeps a useful fill candidate viable.
   return 1 / (1 + (ratio - 1) * 0.15);
 }
 
-function preferredSizeFidelity(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
+function preferredSize(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
   if (candidate.boxes.length === 0) return 0;
   const scores = candidate.boxes.map((box) => {
     const item = poolById.get(box.id);
@@ -63,20 +90,6 @@ function preferredSizeFidelity(candidate: LayoutCandidate, poolById: Map<string,
 }
 
 function spacingConsistency(candidate: LayoutCandidate): number {
-  if (candidate.strategy === "vertical-stack") {
-    const ordered = [...candidate.boxes].sort((a, b) => a.y - b.y);
-    const adjacent = ordered.slice(1).map((box, index) => {
-      const previous = ordered[index]!;
-      return box.y - (previous.y + previous.height);
-    });
-    if (adjacent.some((gap) => gap < 0)) return 0;
-    if (adjacent.length <= 1) return 1;
-    const mean = adjacent.reduce((sum, value) => sum + value, 0) / adjacent.length;
-    if (mean <= 0) return 1;
-    const deviation = adjacent.reduce((sum, value) => sum + Math.abs(value - mean), 0) / adjacent.length;
-    return clamp01(1 - deviation / mean);
-  }
-
   const gaps: number[] = [];
   for (let i = 0; i < candidate.boxes.length; i++) {
     for (let j = i + 1; j < candidate.boxes.length; j++) {
@@ -104,6 +117,105 @@ function spacingConsistency(candidate: LayoutCandidate): number {
   return clamp01(1 - meanDeviation / mean);
 }
 
+function hierarchyQuality(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
+  const hero = candidate.boxes.find((box) => poolById.get(box.id)?.element.role === "hero");
+  const primary = candidate.boxes.find((box) => poolById.get(box.id)?.element.role === "primary");
+  const secondary = candidate.boxes.find((box) => poolById.get(box.id)?.element.role === "secondary");
+  const action = candidate.boxes.find((box) => poolById.get(box.id)?.element.role === "action");
+  const scores: number[] = [];
+  if (hero) {
+    const largestOther = Math.max(1, ...candidate.boxes.filter((box) => box !== hero).map((box) => box.width * box.height));
+    scores.push(clamp01((hero.width * hero.height) / largestOther));
+  }
+  if (primary && secondary) scores.push(clamp01(primary.height / secondary.height));
+  if (action && secondary) scores.push(clamp01(action.height / secondary.height));
+  return scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : 1;
+}
+
+function hierarchyAndSpacing(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
+  return (spacingConsistency(candidate) + hierarchyQuality(candidate, poolById)) / 2;
+}
+
+/** Distinct starting edges relative to element count — fewer unique x/y
+ * origins reads as a more deliberately aligned composition. */
+function alignmentConsistency(candidate: LayoutCandidate): number {
+  const boxes = candidate.boxes;
+  if (boxes.length <= 1) return 1;
+  const uniqueX = new Set(boxes.map((b) => Math.round(b.x))).size;
+  const uniqueY = new Set(boxes.map((b) => Math.round(b.y))).size;
+  const xScore = clamp01(1 - (uniqueX - 1) / boxes.length);
+  const yScore = clamp01(1 - (uniqueY - 1) / boxes.length);
+  return (xScore + yScore) / 2;
+}
+
+function intersectionArea(boxes: ResolvedBox[], region: Rect): number {
+  let sum = 0;
+  for (const box of boxes) {
+    const overlapX = Math.min(box.x + box.width, region.x + region.width) - Math.max(box.x, region.x);
+    const overlapY = Math.min(box.y + box.height, region.y + region.height) - Math.max(box.y, region.y);
+    if (overlapX > 0 && overlapY > 0) sum += overlapX * overlapY;
+  }
+  return sum;
+}
+
+/** Region-aware: splits the rect into left/right and top/bottom halves and
+ * checks the WORST-covered half on each axis — catches a lopsided dead
+ * pocket (e.g. an empty left column) that a single global coverage number
+ * hides behind an otherwise-full bounding box. Also checks the CENTER third
+ * directly — a composition that pushes everything to the far edges can still
+ * score well on the half-based checks (each half has some content near its
+ * own edge) while leaving a hollow, empty middle. */
+function deadRegionPenalty(candidate: LayoutCandidate, rect: Rect): number {
+  if (rect.width <= 0 || rect.height <= 0) return 0;
+  const halfArea = (rect.width / 2) * rect.height;
+  const left = intersectionArea(candidate.boxes, { x: rect.x, y: rect.y, width: rect.width / 2, height: rect.height });
+  const right = intersectionArea(candidate.boxes, { x: rect.x + rect.width / 2, y: rect.y, width: rect.width / 2, height: rect.height });
+  const worstHorizontal = halfArea > 0 ? clamp01(Math.min(left, right) / halfArea) : 1;
+
+  const halfAreaV = rect.width * (rect.height / 2);
+  const top = intersectionArea(candidate.boxes, { x: rect.x, y: rect.y, width: rect.width, height: rect.height / 2 });
+  const bottom = intersectionArea(candidate.boxes, { x: rect.x, y: rect.y + rect.height / 2, width: rect.width, height: rect.height / 2 });
+  const worstVertical = halfAreaV > 0 ? clamp01(Math.min(top, bottom) / halfAreaV) : 1;
+
+  const thirdWidth = rect.width / 3;
+  const centerThirdArea = thirdWidth * rect.height;
+  const centerCoverage = intersectionArea(candidate.boxes, { x: rect.x + thirdWidth, y: rect.y, width: thirdWidth, height: rect.height });
+  const centerThird = centerThirdArea > 0 ? clamp01(centerCoverage / centerThirdArea) : 1;
+
+  return clamp01(1 - (worstHorizontal + worstVertical + centerThird) / 3);
+}
+
+function degradationPenalty(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>, allElements: AdElement[]): number {
+  if (allElements.length === 0) return 0;
+  const degraded = candidate.boxes.filter((box) => {
+    const item = poolById.get(box.id);
+    return item && (item.contentVariant === "compact" || item.shrunk);
+  }).length;
+  return degraded / allElements.length;
+}
+
+function cropPenalty(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
+  if (candidate.boxes.length === 0) return 0;
+  const cropped = candidate.boxes.filter((box) => poolById.get(box.id)?.cropped).length;
+  return cropped / candidate.boxes.length;
+}
+
+function excessiveEnlargementPenalty(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
+  if (candidate.boxes.length === 0) return 0;
+  const scores = candidate.boxes.map((box) => {
+    const item = poolById.get(box.id);
+    if (!item) return 0;
+    const largestRatio = Math.max(
+      box.width / item.measurement.prefWidth,
+      box.height / item.measurement.prefHeight,
+    );
+    // Growth up to 2x supports frame filling; beyond that, progressively
+    // charge a separate negative term even when the semantic cap still allows it.
+    return clamp01((largestRatio - 2) / 3);
+  });
+  return scores.reduce((sum, value) => sum + value, 0) / scores.length;
+}
+
 export function evaluateComposition(candidate: LayoutCandidate, rect: Rect): CompositionMetrics {
   if (candidate.boxes.length === 0 || rect.width <= 0 || rect.height <= 0) {
     return { coverageX: 0, coverageY: 0, balanceX: 0, balanceY: 0, spacingConsistency: 0 };
@@ -126,56 +238,6 @@ export function evaluateComposition(candidate: LayoutCandidate, rect: Rect): Com
   };
 }
 
-function coverageQuality(candidate: LayoutCandidate, metrics: CompositionMetrics): number {
-  const targets: Record<string, { x: number; y: number; xWeight: number }> = {
-    "vertical-stack": { x: 0.95, y: 0.85, xWeight: 0.55 },
-    "horizontal-band": { x: 0.8, y: 0.72, xWeight: 0.65 },
-    "side-by-side-split": { x: 0.9, y: 0.65, xWeight: 0.55 },
-    "adaptive-grid": { x: 0.62, y: 0.62, xWeight: 0.5 },
-  };
-  const target = targets[candidate.strategy] ?? { x: 0.75, y: 0.75, xWeight: 0.5 };
-  const x = clamp01(metrics.coverageX / target.x);
-  const y = clamp01(metrics.coverageY / target.y);
-  return x * target.xWeight + y * (1 - target.xWeight);
-}
-
-function hierarchyQuality(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
-  const hero = candidate.boxes.find((box) => poolById.get(box.id)?.element.role === "hero");
-  const primary = candidate.boxes.find((box) => poolById.get(box.id)?.element.role === "primary");
-  const secondary = candidate.boxes.find((box) => poolById.get(box.id)?.element.role === "secondary");
-  const action = candidate.boxes.find((box) => poolById.get(box.id)?.element.role === "action");
-  const scores: number[] = [];
-  if (hero) {
-    const largestOther = Math.max(1, ...candidate.boxes.filter((box) => box !== hero).map((box) => box.width * box.height));
-    scores.push(clamp01((hero.width * hero.height) / largestOther));
-  }
-  if (primary && secondary) scores.push(clamp01(primary.height / secondary.height));
-  if (action && secondary) scores.push(clamp01(action.height / secondary.height));
-  return scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : 1;
-}
-
-function truncationPenalty(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
-  if (candidate.boxes.length === 0) return 0;
-  const truncated = candidate.boxes.filter((box) => poolById.get(box.id)?.truncated).length;
-  return truncated / candidate.boxes.length;
-}
-
-function excessiveGrowthPenalty(candidate: LayoutCandidate, poolById: Map<string, MeasuredElement>): number {
-  if (candidate.boxes.length === 0) return 0;
-  const scores = candidate.boxes.map((box) => {
-    const item = poolById.get(box.id);
-    if (!item) return 0;
-    const largestRatio = Math.max(
-      box.width / item.measurement.prefWidth,
-      box.height / item.measurement.prefHeight,
-    );
-    // Growth up to 2× supports frame filling. Beyond that, progressively
-    // charge a separate negative term even when the semantic cap still allows it.
-    return clamp01((largestRatio - 2) / 3);
-  });
-  return scores.reduce((sum, value) => sum + value, 0) / scores.length;
-}
-
 export function scoreCandidate(
   candidate: LayoutCandidate,
   pool: MeasuredElement[],
@@ -184,17 +246,20 @@ export function scoreCandidate(
   composition: CompositionMetrics = evaluateComposition(candidate, rect),
 ): number {
   const poolById = new Map(pool.map((item) => [item.element.id, item]));
-  const balance = (composition.balanceX + composition.balanceY) / 2;
-  const rhythmAndHierarchy = (composition.spacingConsistency + hierarchyQuality(candidate, poolById)) / 2;
+  const visualBalance = (composition.balanceX + composition.balanceY) / 2;
 
-  return (
-    SCORE_WEIGHTS.priorityRetained * priorityRetained(candidate, poolById, allElements) +
-    SCORE_WEIGHTS.frameCoverage * coverageQuality(candidate, composition) +
-    SCORE_WEIGHTS.heroShape * heroShapeQuality(candidate, poolById) +
-    SCORE_WEIGHTS.preferredSize * preferredSizeFidelity(candidate, poolById) +
-    SCORE_WEIGHTS.edgeBalance * balance +
-    SCORE_WEIGHTS.rhythmAndHierarchy * rhythmAndHierarchy -
-    SCORE_WEIGHTS.truncationPenalty * truncationPenalty(candidate, poolById) -
-    SCORE_WEIGHTS.excessiveGrowthPenalty * excessiveGrowthPenalty(candidate, poolById)
-  );
+  const raw =
+    SCORE_WEIGHTS.priorityRetention * priorityRetention(candidate, poolById, allElements) +
+    SCORE_WEIGHTS.frameUsage * frameUsage(composition) +
+    SCORE_WEIGHTS.heroQualityAndProminence * heroQualityAndProminence(candidate, poolById, rect) +
+    SCORE_WEIGHTS.visualBalance * visualBalance +
+    SCORE_WEIGHTS.preferredSize * preferredSize(candidate, poolById) +
+    SCORE_WEIGHTS.hierarchyAndSpacing * hierarchyAndSpacing(candidate, poolById) +
+    SCORE_WEIGHTS.alignmentConsistency * alignmentConsistency(candidate) -
+    SCORE_PENALTIES.deadRegion * deadRegionPenalty(candidate, rect) -
+    SCORE_PENALTIES.degradation * degradationPenalty(candidate, poolById, allElements) -
+    SCORE_PENALTIES.crop * cropPenalty(candidate, poolById) -
+    SCORE_PENALTIES.excessiveEnlargement * excessiveEnlargementPenalty(candidate, poolById);
+
+  return clamp01(raw);
 }
